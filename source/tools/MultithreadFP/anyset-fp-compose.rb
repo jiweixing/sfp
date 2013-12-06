@@ -1,5 +1,4 @@
 #!/usr/bin/ruby
-##!/u/hluo/ruby-build/bin/ruby
 #
 # This file reads a sharing graph file, a
 # sfp profile file and thread group. It 
@@ -8,7 +7,7 @@
 #
 # example run:
 #
-# compose27.rb -m [max_threads] -f [sfp_file] -g [sharing_graph.sg] --group=0,1,2,4
+# anyset-fp-compose.rb -m [max_threads] -f [sfp_file] -g [sharing_graph.sg] --group=0,1,2,4
 #
 # Written by Hao Luo
 #
