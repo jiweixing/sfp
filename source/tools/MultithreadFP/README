@@ -1,29 +1,27 @@
-version 1: fastest and correct, used in WODA
-version 2: global lock locks all, slowest but absolutely correct one
-version 3: another representation of algorithm
-version 4: fine granularity to detect false sharing (deprecated)
-version 5: used one bit to represent a lock (deprecated)
-version 6: adjustable granularity to detect false sharing, varying lock granularity and data unit granularity
-version 7: added function level instrumentation
-version 8: refactored code and able to measure difference of two granularities in one single pass
-version 9: able to identify hot pages of false sharing
-version 10: filter those instructions not in main executable
-version 11: generate a raw memory mapping file, copied from /proc/$pid/smaps, for page mappings
-version 12: anyk-sfp algorithm, together with scalable implement of lock and cacheblock metadata
-version 13: anyk-wr-sfp algorithm, together with scalable implement of lock and cacheblock metadata
-version 14: dual-anyk-wr-sfp algorithm, together with scalable implement of lock and cacheblock metadata
-version 15: automatic false sharing detection
-version 16: modified version 14, for attaching tool to server workload, features including interval profiling
-version 17: modified version 16, for attaching tool to server workload, features including server app false sharing detection
-version 18/19: implemented anyk-wr-sfp, used in asplos submission, v18 includes more info
-version 20: implemented anyk-wr-sfp but with one window size stats
-version 21: the same as version 19, plus a compose2.rb sharing graph constructed
-version 22: only extract a subset of threads' sfp
-version 23: the same as version 21, plus a compose3.rb sharing graph constructed
-version 24: the same as version 21, but try using linear model to compose per-data sharer graph
-version 25: simple sharing graph, with filtering some threads
-version 26: same with 25, with no filtering
+MultithreadFP is a tool that measures the shared footprint 
+of a multithreaded application. Three tools are included
+here.
 
-two simple test files:
-mm.c : double precision matrix multiplication
-mmi.c : integer matrix multiplication
+anyk-sfp : This tool measures the shared footprint for
+           all sharing degrees. It only differentiates
+           the thread count but not the thread set.
+
+anyk-wr-sfp : This tool is an extension of anyk-sfp. It
+              not only measures the sharing degree, but
+              also considers memory reference types. It
+              calculates three types of shared footprints.
+
+anyset-fp : This tool is another extension of anyk-sfp.
+            Beside of measuring the shared footprint of
+            all sharing degree, it computes the total 
+            footprint of any thread set. It dumps the 
+            stats for all thread set into text files and
+            uses anyset-fp-compose script to compose 
+            the footprint for a given thread set. It incurs
+            a lot overhead, and only scales up to 22 threads
+
+These tools are implemented in Pin Tools 2.13 and can be 
+ported to other platforms.
+
+Hao Luo
+12/5/2013
