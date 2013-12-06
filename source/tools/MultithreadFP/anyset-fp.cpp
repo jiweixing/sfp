@@ -19,9 +19,9 @@ using namespace INSTLIB;
 /* ===================================================================== */
 /* Global Macro definitions */
 /* ===================================================================== */
-#define MAX_PILLARS 25    // the max window length is no more than 2^34, 
-                          // the lowest pillar is expected to be 2^10,
-                          // therefore 34-10 = 24 pillars are needed
+#define MAX_PILLARS 12    // the max window length is no more than 2^34, 
+                          // the lowest pillar is expected to be 2^12,
+                          // therefore 2^34 / 2^12 = 2^22 = 4^11 pillars are needed
 #define MAP_SIZE 0x7fffff // if long is 64bit, size should be larger 
 #define MAX_THREAD 22     // max thread supported
 
@@ -50,7 +50,7 @@ KNOB<string> KnobResultFile(KNOB_MODE_WRITEONCE, "pintool",
  */
 /* knob of lowest pillar */
 KNOB<int> KnobLPillar(KNOB_MODE_WRITEONCE, "pintool",
-			 "l", "10", "specify the lowest pillar in log scale");
+			 "l", "12", "specify the lowest pillar in log scale");
 
 /* knob of sharing graph dump file */
 KNOB<string> KnobSharingGraphFile(KNOB_MODE_WRITEONCE, "pintool",
@@ -698,7 +698,7 @@ int main(int argc, char *argv[])
     {
       if ( i!=0 )
       {
-        gPillarLengths[i] = gPillarLengths[i-1]*2;
+        gPillarLengths[i] = gPillarLengths[i-1]*4;
       }
       gPillars[i] = new TStamp[1<<MAX_THREAD];
       for(int j=0; j<(1<<MAX_THREAD); j++)

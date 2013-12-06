@@ -7,9 +7,7 @@
 #
 # example run:
 #
-# anyset-fp-compose.rb -m [max_threads] -l [lowest_pillar] -p [pillar_step] -f [sfp_file] -g [sharing_graph.sg] --group=0,1,2,4
-#
-# e.g. ./anyset-fp-compose.rb -m 8 -l 10 -p 1 -f fp.out -g sg.out --group=1,2,3,4
+# anyset-fp-compose.rb -m [max_threads] -f [sfp_file] -g [sharing_graph.sg] --group=0,1,2,4
 #
 # Written by Hao Luo
 #
@@ -22,12 +20,6 @@ options = {}
 OptionParser.new do |opts|
   opts.on('-m', '--max-threads [MAX_THREAD]', Integer, "The Max Threads") do |f|
     options[:max_thread] = f
-  end
-  opts.on('-l', '--lowest-pillar [LOWEST_PILLAR]', Integer, "The lowest pillar") do |f|
-    options[:lowest_pillar] = f
-  end
-  opts.on('-p', '--pillar-step [PILLAR_STEP]', Integer, "The pillar step") do |f|
-    options[:pillar_step] = f
   end
   opts.on('-f', '--sfp-profile [FILE]', String, "The sfp profile file") do |f|
     options[:sfp_profile] = f
@@ -99,15 +91,10 @@ class Composer
   attr_accessor :max_threads, :sgraph, :sfp
   attr_reader :weight_map
   attr_accessor :curve_length
-  attr_accessor :gLowestPillar, :pillar_step, :gPillarLengths
 
-  def initialize(max_thread, sgraph_file, sfp_file, lowest_pillar, pillar_step)
+  def initialize(max_thread, sgraph_file, sfp_file)
     @max_threads = max_thread
     @weight_map = Array.new
-    @gPillarLengths = Array.new
-    @gLowestPillar = lowest_pillar
-    @pillar_step = pillar_step
-
     read_sfp_profile(sfp_file)
     read_sgraph(sgraph_file)
   end
@@ -121,7 +108,7 @@ class Composer
 
     #  FIXME max trace length 2^35 ?
     #
-    (@gLowestPillar..35).each do |ext|
+    (10..35).each do |ext|
       sg_filename = filename + ".#{ext}"
       if not File.exist?( sg_filename )
         return
@@ -131,7 +118,6 @@ class Composer
         temp[l.split("\t")[0].reverse.to_i(2)] = l.split("\t")[1].to_f
       end
       @sgraph << temp
-      @gPillarLengths << (1<<(ext<<@pillar_step))
     end
 
   end
@@ -263,7 +249,6 @@ class Composer
     (b1&b2) != 0
 
   end
-
   # ==========================================
   # get portion of sfp for a subset of threads
   # the subset of threads is represented as 
@@ -287,16 +272,21 @@ class Composer
 
     end
 
+    #(0..@sgraph.size-1).each do |i|
+    #  puts porp[i]
+    #  puts ""
+    #end
+
     ret = SFPCurve.new(@curve_length)
     phase = 0
-    max_ft_at_current_phase = @gPillarLengths[phase]
+    max_ft_at_current_phase = 1<<(10+phase)
 
     (0..@curve_length-1).each do |i|
       ws = @sfp.ft_at(i)
       ret.ft << ws
       if ws > max_ft_at_current_phase
         phase = phase + 1
-        max_ft_at_current_phase = @gPillarLengths[phase]
+        max_ft_at_current_phase = 1<<(10+phase)
       end 
 
       # current window smaller than max_ft at this phase
@@ -306,7 +296,8 @@ class Composer
         elsif phase == @sgraph.size
           r += porp[phase-1][k] * @sfp[k][i]
         else
-          c = porp[phase-1][k] + ((ws - @gPillarLengths[phase-1]).to_f / (@gPillarLengths[phase] - @gPillarLengths[phase-1]).to_f * (porp[phase][k]-porp[phase-1][k]))
+          c = porp[phase-1][k] + ((ws - (1<<(9+phase))).to_f / (1<<(9+phase)).to_f * (porp[phase][k]-porp[phase-1][k]))
+          #puts c if k == 3
           r += c * @sfp[k][i]
         end
         r
@@ -345,9 +336,19 @@ end
 
 c = Composer.new(options[:max_thread], 
                  options[:sharing_graph], 
-                 options[:sfp_profile],
-                 options[:lowest_pillar],
-                 options[:pillar_step])
+                 options[:sfp_profile])
 c.cache_total_weights
+#puts c.weight_map
+#c.dump_hash(c.sgraph)
+#c.dump_sfp(c.sfp)
+#puts options[:thread_group]
 group_bitmap = Composer.array_to_bitmap(options[:thread_group])
 puts c.sfp_partial(group_bitmap).sfp
+#(1..2047).each do |x|
+
+  #group_bitmap = Composer.array_to_bitmap(options[:thread_group])
+  #if Composer.count_ones(x) == 4
+  #  puts "#{c.sfp_partial(x).sfp[c.curve_length-1]} => #{x.to_s(2)}"
+  #end
+
+#end
