@@ -541,7 +541,7 @@ LOCALFUN VOID OpenOutputFile() {
 
     ResultFile[i].open(ss.str().c_str());
 
-    ResultFile[i] << dec << "N:" << N << " Memory size: " << MAP_SIZE << " total_time:" << gWalltime  << endl;  
+    ResultFile[i] << dec << "N:" << N << " Threads: " << gThreadNum << " total_time:" << gWalltime  << endl;  
     ResultFile[i] << "ws\t";
     for(int j=0;j<MAX_THREAD;j++) {
       ResultFile[i] << j+1 << "\t";

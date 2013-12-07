@@ -402,7 +402,7 @@ LOCALFUN VOID CollectLastAccesses() {
 LOCALFUN VOID OpenOutputFile() {
 
   ResultFile.open(KnobResultFile.Value().c_str());
-  ResultFile << dec << "N:" << N << " Memory size: " << MAP_SIZE << " total_time:" << gWalltime  << endl;  
+  ResultFile << dec << "N:" << N << " Threads: " << gThreadNum << " total_time:" << gWalltime  << endl;  
   ResultFile << "ws\t";
   for(TStamp j=0;j<MAX_THREAD;j++) {
     ResultFile << j+1 << "\t";
