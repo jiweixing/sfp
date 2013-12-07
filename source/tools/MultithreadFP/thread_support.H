@@ -12,7 +12,10 @@
 #ifndef _MULTI_THREAD_FP_H_
 #define _MULTI_THREAD_FP_H_
 
+#include <vector>
 #include "pin.H"
+
+using namespace std;
 
 /* ======================================= */
 /* Global thread variables */
@@ -35,10 +38,15 @@ unsigned gThreadNum = 0;
 struct local_stat_t {
 
   /* Add thread local information and updating method here */
-  bool enabled;    
+  bool enabled;
+  vector<int> tasks;
+  int current_task; 
 
-  local_stat_t() : enabled(false) 
-  {}
+  local_stat_t() : enabled(false),
+                   current_task(0)
+  {
+    tasks.push_back(0);
+  }
 };
 
 /* ======================================= */
