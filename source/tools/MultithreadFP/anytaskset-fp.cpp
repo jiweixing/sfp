@@ -539,7 +539,7 @@ LOCALFUN VOID OpenOutputFile() {
 LOCALFUN VOID BuildSharingGraph()
 {
   // FIXME is it ok here to use int to represent a bitmap
-  int max_index = 1<<gThreadNum;
+  int max_index = (1<<MAX_THREAD);
 
   /* dump gPillars profile to file */
   ofstream sharing_graph_file;
@@ -560,16 +560,16 @@ LOCALFUN VOID BuildSharingGraph()
     for( int i=1; i<max_index; i++)
     {
       char buffer[MAX_THREAD+1];
-      int n = i;
-      int k = 0;
-      do {
-        buffer[k++] = n%2 + '0';
-      } while ((n/=2)>0);
-      buffer[k] = '\0';
       
       /* only dump the non zero thread set's pillars */
       if ( gPillars[j][i] != 0 )
       {
+        int k = 0;
+        int n = i;
+        do {
+          buffer[k++] = n%2 + '0';
+        } while ((n/=2)>0);
+        buffer[k] = '\0';
         sharing_graph_file << buffer << '\t' << 1.0 * gPillars[j][i] / (N - gPillarLengths[j] + 1) << endl;
       }
     }
@@ -663,29 +663,44 @@ VOID Fini(INT32 code, VOID* v){
   }
 }
 
-int BeforeTaskStart(int taskid) {
+//
+// The replacing routine for SFP_TaskStart
+//
+void BeforeTaskStart(int tid) {
   
   local_stat_t* lstat = get_tls(PIN_ThreadId());
-  lstat->tasks.push_back(taskid);
-  lstat->current_task = taskid;
-  return 0;
+  if ( tid > MAX_THREAD )
+  {
+    cerr << "task id is too large" << endl;
+    return;
+  }
+  lstat->tasks.push_back(tid);
+  lstat->current_task = tid;
 
 }
 
-int BeforeTaskEnd(int tid) {
+//
+// The replacing routine for SFP_TaskEnd
+//
+void BeforeTaskEnd(int tid) {
 
   local_stat_t* lstat = get_tls(PIN_ThreadId());
   if ( tid != lstat->current_task || tid != lstat->tasks.back() )
   {
-    cout << "task ends at wrong task id" << endl;
-    return 1;
+    cerr << "task ends at wrong task id" << endl;
+    return;
   }
   lstat->tasks.pop_back();
   lstat->current_task = lstat->tasks.back();
-  return 0;
 
 }
 
+//
+// Replacing SFP_TaskStart and SFP_TaskEnd to
+// get he user provided task id
+//
+// These two routines must NOT be inlined
+//
 VOID ImageLoad( IMG img, VOID* v) {
 
   RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
@@ -693,27 +708,9 @@ VOID ImageLoad( IMG img, VOID* v) {
 
   if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
   {
-    
-    PROTO proto_start = PROTO_Allocate( PIN_PARG(int), CALLINGSTD_DEFAULT,
-                                        "SFP_TaskStart", PIN_PARG(int), PIN_PARG_END() );
-    PROTO proto_end   = PROTO_Allocate( PIN_PARG(int), CALLINGSTD_DEFAULT,
-                                        "SFP_TaskEnd", PIN_PARG(int), PIN_PARG_END() );
 
-    RTN_ReplaceSignature(
-        start_rtn, AFUNPTR( BeforeTaskStart ),
-        IARG_PROTOTYPE, proto_start,
-        IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
-        IARG_END);
-
-    RTN_ReplaceSignature(
-        end_rtn, AFUNPTR( BeforeTaskEnd ),
-        IARG_PROTOTYPE, proto_end,
-        IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
-        IARG_END);
-
-    PROTO_Free(proto_start);
-    PROTO_Free(proto_end);
-
+    RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
+    RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
   }
 
 }
