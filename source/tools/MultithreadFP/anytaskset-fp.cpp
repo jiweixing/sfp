@@ -100,6 +100,11 @@ typedef struct {
   map<ADDRINT, TStampList> set;
 } TStampTblEntry;
 
+typedef union {
+  sfp_lock_t lock;
+  char padding[WORDWIDTH];
+} TPLock;
+
 #include "thread_support.H"
 
 struct timeval start;         // start time of profiling
@@ -124,7 +129,10 @@ TStampTblEntry* gStampTbl;
 int gLowestPillar;
 
 /* global pillar set */
-TStamp* gPillars[MAX_PILLARS];
+TPLock gPillarsLock[MAX_PILLARS];
+
+// FIXME : is it ok to use int to represent bitmap?
+map<int, TStamp> gPillars[MAX_PILLARS];
 
 /* window lengths the pillars represent */
 TStamp gPillarLengths[MAX_PILLARS];
@@ -210,14 +218,19 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
       /* if c is in [low, high], profile rpoint-c, that is the count
        * of windows with sharer pattern bitmap 
        */
-      __sync_fetch_and_add(&gPillars[i][bitmap], rpoint-c);
+      
+      lock_acquire(&gPillarsLock[i].lock);
+      gPillars[i][bitmap] += rpoint-c;
+      lock_release(&gPillarsLock[i].lock);
 
       /* update rpoint and bitmap */
       rpoint = c;
       bitmap |= (1<<iter);
     }
 
-    __sync_fetch_and_add(&gPillars[i][bitmap], rpoint-low);
+    lock_acquire(&gPillarsLock[i].lock);
+    gPillars[i][bitmap] += rpoint-low;
+    lock_release(&gPillarsLock[i].lock);
   }
 
   for(iter = head; iter != -1; iter = s.list[iter].next) {
@@ -539,7 +552,7 @@ LOCALFUN VOID OpenOutputFile() {
 LOCALFUN VOID BuildSharingGraph()
 {
   // FIXME is it ok here to use int to represent a bitmap
-  int max_index = (1<<MAX_THREAD);
+  //int max_index = (1<<MAX_THREAD);
 
   /* dump gPillars profile to file */
   ofstream sharing_graph_file;
@@ -557,21 +570,20 @@ LOCALFUN VOID BuildSharingGraph()
     sharing_graph_file.open(ss.str().c_str());
 
     /* dump to files */
-    for( int i=1; i<max_index; i++)
+    for( map<int, TStamp>::iterator iter = gPillars[j].begin(); 
+         iter != gPillars[j].end(); 
+         iter++)
     {
+      int i = iter->first;
       char buffer[MAX_THREAD+1];
       
-      /* only dump the non zero thread set's pillars */
-      if ( gPillars[j][i] != 0 )
-      {
-        int k = 0;
-        int n = i;
-        do {
-          buffer[k++] = n%2 + '0';
-        } while ((n/=2)>0);
-        buffer[k] = '\0';
-        sharing_graph_file << buffer << '\t' << 1.0 * gPillars[j][i] / (N - gPillarLengths[j] + 1) << endl;
-      }
+      int k = 0;
+      int n = i;
+      do {
+        buffer[k++] = n%2 + '0';
+      } while ((n/=2)>0);
+      buffer[k] = '\0';
+      sharing_graph_file << buffer << '\t' << 1.0 * gPillars[j][i] / (N - gPillarLengths[j] + 1) << endl;
     }
     
     /* close file */
@@ -657,10 +669,12 @@ VOID Fini(INT32 code, VOID* v){
 
   /* deallocate the global stamp table */
   delete[] gStampTbl;
+#if 0
   for(int i=0; i<MAX_PILLARS; i++)
   {
     delete[] gPillars[i];
   }
+#endif
 }
 
 //
@@ -668,6 +682,7 @@ VOID Fini(INT32 code, VOID* v){
 //
 void BeforeTaskStart(int tid) {
   
+  cout << "BeforeTaskStart " << tid << endl;
   local_stat_t* lstat = get_tls(PIN_ThreadId());
   if ( tid > MAX_THREAD )
   {
@@ -684,6 +699,7 @@ void BeforeTaskStart(int tid) {
 //
 void BeforeTaskEnd(int tid) {
 
+  cout << "BeforeTaskEnd " << tid << endl;
   local_stat_t* lstat = get_tls(PIN_ThreadId());
   if ( tid != lstat->current_task || tid != lstat->tasks.back() )
   {
@@ -697,7 +713,7 @@ void BeforeTaskEnd(int tid) {
 
 //
 // Replacing SFP_TaskStart and SFP_TaskEnd to
-// get he user provided task id
+// get the user provided task id
 //
 // These two routines must NOT be inlined
 //
@@ -708,6 +724,7 @@ VOID ImageLoad( IMG img, VOID* v) {
 
   if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
   {
+    cout << "replaced" << endl;
 
     RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
     RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
@@ -754,11 +771,15 @@ int main(int argc, char *argv[])
       {
         gPillarLengths[i] = gPillarLengths[i-1]*4;
       }
+
+      lock_release(&gPillarsLock[i].lock);
+#if 0
       gPillars[i] = new TStamp[1<<MAX_THREAD];
       for(int j=0; j<(1<<MAX_THREAD); j++)
       {
         gPillars[i][j] = 0;
       }
+#endif
     }
       
     /* check for knobs if region instrumentation is involved */
