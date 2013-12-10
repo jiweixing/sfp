@@ -23,7 +23,7 @@ using namespace INSTLIB;
                           // the lowest pillar is expected to be 2^12,
                           // therefore 2^34 / 2^12 = 2^22 = 4^11 pillars are needed
 #define MAP_SIZE 0x7fffff // if long is 64bit, size should be larger 
-#define MAX_THREAD 22     // max thread supported
+#define MAX_THREAD 32     // max thread supported
 
 #define SETSHIFT 6
 #define WORDSHIFT 6
@@ -90,6 +90,9 @@ typedef struct TStampList_t {
   }
 } TStampList;
 
+/* simple bitmap type */
+typedef uint64_t TBitset;
+
 /* configures used in histo.H */
 const  uint32_t              SUBLOG_BITS = 8;
 const  uint32_t              MAX_WINDOW = (65-SUBLOG_BITS)*(1<<SUBLOG_BITS);
@@ -131,8 +134,7 @@ int gLowestPillar;
 /* global pillar set */
 TPLock gPillarsLock[MAX_PILLARS];
 
-// FIXME : is it ok to use int to represent bitmap?
-map<int, TStamp> gPillars[MAX_PILLARS];
+map<TBitset, TStamp> gPillars[MAX_PILLARS];
 
 /* window lengths the pillars represent */
 TStamp gPillarLengths[MAX_PILLARS];
@@ -169,8 +171,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
   /* following loop profiles the pillar statistics, to obtain any thread set's fp */
   for(int i=0; i<MAX_PILLARS && pos>gPillarLengths[i]; i++)
   {
-    // FIXME use int to store a bitmap, is it OK?
-    int bitmap = 0;
+    TBitset bitmap = 0;
    
     /* high is the right most point a window's left end could reach*/
     TStamp high = pos - gPillarLengths[i];
@@ -203,7 +204,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
       /* c > high means all these windows must contain thread 'iter' */
       if ( c > high )
       {
-        bitmap |= (1<<iter);
+        bitmap |= ((TBitset)1<<iter);
         continue;
       }
 
@@ -225,7 +226,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
 
       /* update rpoint and bitmap */
       rpoint = c;
-      bitmap |= (1<<iter);
+      bitmap |= ((TBitset)1<<iter);
     }
 
     lock_acquire(&gPillarsLock[i].lock);
@@ -504,12 +505,12 @@ LOCALFUN VOID CollectLastAccesses() {
           if ( c <= low )  break;
           if ( c > high )
           {
-            bitmap |= (1<<j);
+            bitmap |= ((TBitset)1<<j);
             continue;
           }
           gPillars[k][bitmap] += rpoint-c;
           rpoint = c;
-          bitmap |= (1<<j);
+          bitmap |= ((TBitset)1<<j);
         }
         gPillars[k][bitmap] += rpoint - low;
       }
@@ -551,8 +552,6 @@ LOCALFUN VOID OpenOutputFile() {
 //
 LOCALFUN VOID BuildSharingGraph()
 {
-  // FIXME is it ok here to use int to represent a bitmap
-  //int max_index = (1<<MAX_THREAD);
 
   /* dump gPillars profile to file */
   ofstream sharing_graph_file;
@@ -570,15 +569,16 @@ LOCALFUN VOID BuildSharingGraph()
     sharing_graph_file.open(ss.str().c_str());
 
     /* dump to files */
-    for( map<int, TStamp>::iterator iter = gPillars[j].begin(); 
+    for( map<TBitset, TStamp>::iterator iter = gPillars[j].begin(); 
          iter != gPillars[j].end(); 
          iter++)
     {
-      int i = iter->first;
+      TBitset i = iter->first;
       char buffer[MAX_THREAD+1];
       
       int k = 0;
-      int n = i;
+      // FIXME cast from TBitset to int, is it ok?
+      TBitset n = i;
       do {
         buffer[k++] = n%2 + '0';
       } while ((n/=2)>0);
@@ -669,12 +669,6 @@ VOID Fini(INT32 code, VOID* v){
 
   /* deallocate the global stamp table */
   delete[] gStampTbl;
-#if 0
-  for(int i=0; i<MAX_PILLARS; i++)
-  {
-    delete[] gPillars[i];
-  }
-#endif
 }
 
 //
@@ -773,13 +767,6 @@ int main(int argc, char *argv[])
       }
 
       lock_release(&gPillarsLock[i].lock);
-#if 0
-      gPillars[i] = new TStamp[1<<MAX_THREAD];
-      for(int j=0; j<(1<<MAX_THREAD); j++)
-      {
-        gPillars[i][j] = 0;
-      }
-#endif
     }
       
     /* check for knobs if region instrumentation is involved */
