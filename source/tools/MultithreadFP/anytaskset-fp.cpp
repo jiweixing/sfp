@@ -72,23 +72,11 @@ typedef union {
 /* a compact list of time stamps */
 typedef struct {
   TStamp latest;
-  char next;
+  char tid;
 } TStampListElement;
 
 /* metadata associated with each datum */
-typedef struct TStampList_t {
-
-  /* a compact list of time stamps */
-  TStampListElement list[MAX_THREAD];
-  char head;
-
-  TStampList_t() : head(-1) {
-    for(int i=0;i<MAX_THREAD;i++) {
-      list[i].latest = 0;
-      list[i].next = -1;
-    }
-  }
-} TStampList;
+typedef list<TStampListElement> TStampList;
 
 /* simple bitmap type */
 typedef uint64_t TBitset;
@@ -156,17 +144,14 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
   /* find current address's stamp */
   s = gStampTbl[set_idx].set[addr];
  
-  int head = s.head;
-  
   /* traverse the datum's access list to profile
    * the intervals
    * if current access is first access to the 
    * datum by this thread, following loop will
    * be skipped
    */
-  int iter;
+  TStampList::iterator iter;
   int thd_count = 0;
-  int prev = -1;
 
   /* following loop profiles the pillar statistics, to obtain any thread set's fp */
   for(int i=0; i<MAX_PILLARS && pos>gPillarLengths[i]; i++)
@@ -177,9 +162,9 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
     TStamp high = pos - gPillarLengths[i];
     /* low is the left most point a window's left end could reach */
     TStamp low;
-    if ( head != -1 && s.list[head].latest > gPillarLengths[i] )
+    if ( !s.empty()  && s.front().latest > gPillarLengths[i] )
     {
-      low = s.list[head].latest - gPillarLengths[i];
+      low = s.front().latest - gPillarLengths[i];
     }
     else
     {
@@ -194,17 +179,18 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
      * datum's time stamp list
      */
     TStamp rpoint = high;
-    for(iter=head; iter!=-1; iter=s.list[iter].next)
+    
+    for(iter=s.begin(); iter!=s.end(); iter++)
     {
      /* by moving rpoint, we can determine the count of windows of
       * different sharer sets
       */
-      TStamp c = s.list[iter].latest;
+      TStamp c = iter->latest;
 
       /* c > high means all these windows must contain thread 'iter' */
       if ( c > high )
       {
-        bitmap |= ((TBitset)1<<iter);
+        bitmap |= ((TBitset)1<<(iter->tid));
         continue;
       }
 
@@ -226,7 +212,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
 
       /* update rpoint and bitmap */
       rpoint = c;
-      bitmap |= ((TBitset)1<<iter);
+      bitmap |= ((TBitset)1<<(iter->tid));
     }
 
     lock_acquire(&gPillarsLock[i].lock);
@@ -234,10 +220,10 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
     lock_release(&gPillarsLock[i].lock);
   }
 
-  for(iter = head; iter != -1; iter = s.list[iter].next) {
+  for(iter = s.begin(); iter != s.end(); iter++) {
 
     /* if we reach the last access by tid */
-    TStamp distance = pos - s.list[iter].latest - 1;
+    TStamp distance = pos - iter->latest - 1;
 
     /*
      * profile MI[thd_count][idx] and MI_i[thd_count][idx]
@@ -247,12 +233,11 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
     __sync_add_and_fetch(&wcount_i[thd_count][idx], distance);
 
     /* if tid is met, stop the traversal */
-    if (iter == tid) {
+    if (iter->tid == tid) {
       break;
     }
 
     /* always record the previous thread before tid */
-    prev = iter;
     thd_count++;
 
     /*
@@ -267,7 +252,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
   /* if iter is -1, the list is traversed without finding tid,
    * then this access is first access made by tid
    */
-  if ( iter == -1 ) {
+  if ( iter == s.end() ) {
 
     TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(pos-1);
 
@@ -282,9 +267,17 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
      */
     __sync_add_and_fetch(&M[thd_count].con, 1);
   }
-   
+  else
+  {
+    s.erase(iter);
+  }
+
+  TStampListElement e = {pos, (char)tid};
+  s.push_front(e);
+  
+#if 0 
   /* update the latest access time of tid to pos */
-  s.list[tid].latest = pos;
+  iter->latest = pos;
   
   /* prev is not -1, prev *MUST* points to tid's previous thread */
   if ( prev != -1 ) {
@@ -294,6 +287,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
 
   /* update head of the stamp list */
   s.head = tid;
+#endif
 
   /* set back addr's time stamp list */
   gStampTbl[set_idx].set[addr] = s;
@@ -471,16 +465,16 @@ VOID Trace(TRACE trace, VOID* v) {
 //
 LOCALFUN VOID CollectLastAccesses() {
   
-  int j, thd_count;
+  int thd_count;
+  TStampList::iterator iter;
 
   /* traversing all entries in gStampTbl */
   for(int i=0;i<MAP_SIZE+1;i++) {
 
     /* traversing all data in a set */
-    for(map<ADDRINT, TStampList>::iterator iter = gStampTbl[i].set.begin(); iter!=gStampTbl[i].set.end(); iter++) {
+    for(map<ADDRINT, TStampList>::iterator entry = gStampTbl[i].set.begin(); entry!=gStampTbl[i].set.end(); entry++) {
 
-      TStampList s = iter->second;
-      int head = s.head;
+      TStampList s = entry->second;
       
       /* the logic of profiling the leftover intervals is the same in SfpImpl */
       for(int k=0; k<MAX_PILLARS && N+1>gPillarLengths[k]; k++)
@@ -489,9 +483,9 @@ LOCALFUN VOID CollectLastAccesses() {
         TStamp high = N+1-gPillarLengths[k];
         TStamp low;
 
-        if ( s.list[head].latest > gPillarLengths[k] )
+        if ( s.front().latest > gPillarLengths[k] )
         {
-          low = s.list[head].latest - gPillarLengths[k];
+          low = s.front().latest - gPillarLengths[k];
         }
         else
         {
@@ -499,26 +493,26 @@ LOCALFUN VOID CollectLastAccesses() {
         }
 
         TStamp rpoint = high;
-        for(j=s.head; j!=-1; j=s.list[j].next)
+        for(iter=s.begin(); iter!=s.end(); iter++)
         {
-          TStamp c = s.list[j].latest;
+          TStamp c = iter->latest;
           if ( c <= low )  break;
           if ( c > high )
           {
-            bitmap |= ((TBitset)1<<j);
+            bitmap |= ((TBitset)1<<(iter->tid));
             continue;
           }
           gPillars[k][bitmap] += rpoint-c;
           rpoint = c;
-          bitmap |= ((TBitset)1<<j);
+          bitmap |= ((TBitset)1<<(iter->tid));
         }
         gPillars[k][bitmap] += rpoint - low;
       }
  
       /* traverse address's stamp's list to collect leftover intervals */
-      for(j=s.head, thd_count = 0; j!=-1; j=s.list[j].next, thd_count++) {
+      for(iter=s.begin(), thd_count = 0; iter!=s.end(); iter++, thd_count++) {
 
-        TStamp distance = N - s.list[j].latest;
+        TStamp distance = N - iter->latest;
         TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(distance);
 
         /*
