@@ -23,7 +23,7 @@ using namespace INSTLIB;
                           // the lowest pillar is expected to be 2^12,
                           // therefore 2^34 / 2^12 = 2^22 = 4^11 pillars are needed
 #define MAP_SIZE 0x7fffff // if long is 64bit, size should be larger 
-#define MAX_THREAD 32     // max thread supported
+#define MAX_THREAD 40     // max thread supported
 
 #define SETSHIFT 6
 #define WORDSHIFT 6
@@ -36,6 +36,8 @@ using namespace INSTLIB;
 
 #define SetIndex(x) (((x)>>SETSHIFT)&MAP_SIZE)
 #define WordIndex(x) ((x)&~WORDMASK)
+
+#define SFP_SAMPLE_FREQUENCY 1
 
 /* ===================================================================== */
 /* Global Variables */
@@ -108,6 +110,7 @@ ofstream ResultFile;
 TStamp gWalltime;
 
 volatile static TStamp N = 0; // trace length
+volatile static TStamp N_sample = 0; // trace length
 TPStamp M[MAX_THREAD];        // total memory footprint for each thread count
 
 INT64 wcount[MAX_THREAD][MAX_WINDOW];
@@ -300,6 +303,11 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
  * ================================================== */
 VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type)
 {
+
+  __sync_fetch_and_add(&N_sample, 1);
+  //if ( N_sample % SFP_SAMPLE_FREQUENCY != 0) {
+    return;
+  //}
 
   /* get tls handle before while loop to save some operations */
   local_stat_t* lstat = get_tls(tid);
