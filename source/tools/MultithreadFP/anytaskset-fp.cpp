@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "pin.H"
 #include "portability.H"
@@ -37,7 +38,7 @@ using namespace INSTLIB;
 #define SetIndex(x) (((x)>>SETSHIFT)&MAP_SIZE)
 #define WordIndex(x) ((x)&~WORDMASK)
 
-#define SFP_SAMPLE_FREQUENCY 1
+#define SFP_SAMPLE_FREQUENCY 20
 
 /* ===================================================================== */
 /* Global Variables */
@@ -130,7 +131,8 @@ map<TBitset, TStamp> gPillars[MAX_PILLARS];
 /* window lengths the pillars represent */
 TStamp gPillarLengths[MAX_PILLARS];
 
-
+/* Brk address, the highest address for shared data */
+ADDRINT gBrk;
 
 /* ===================================================================== */
 /* Routines */
@@ -301,17 +303,25 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
 /* ==================================================
  * Routine handling atomic trace processing
  * ================================================== */
-VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type)
+VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, ADDRINT sp)
 {
-
-  __sync_fetch_and_add(&N_sample, 1);
-  //if ( N_sample % SFP_SAMPLE_FREQUENCY != 0) {
-    return;
-  //}
 
   /* get tls handle before while loop to save some operations */
   local_stat_t* lstat = get_tls(tid);
   if( !lstat->enabled ) return;
+
+  /* simple sampling logic */
+  __sync_fetch_and_add(&N_sample, 1);
+  if ( N_sample % SFP_SAMPLE_FREQUENCY != 0) 
+  {
+    return;
+  }
+
+  /* no profiling on stack variables */
+  if ( (ADDRINT)addr > sp )
+  {
+    return;
+  }
 
   /*
    * laddr is the lowest cacheline base touched by interval [addr, addr+size]
@@ -418,7 +428,21 @@ VOID Instruction(INS ins, VOID *v) {
     // On the IA-32 and Intel(R) 64 architectures conditional moves and REP
     // prefixed instructions appear as predicated instructions in Pin
     //
-    
+
+#if 0
+    if (INS_RegWContain(ins, REG_STACK_PTR))
+    {
+      IPOINT where = IPOINT_AFTER;
+      if (!INS_HasFallThrough(ins))
+          where = IPOINT_TAKEN_BRANCH;
+
+      INS_InsertIfCall(ins, where, (AFUNPTR)OnStackChangeIf, 
+                       IARG_REG_VALUE, REG_STACK_PTR,
+                       IARG_END);
+
+    }
+#endif
+
     UINT32 memOperands = INS_MemoryOperandCount(ins);
     
     for (UINT32 memOp = 0; memOp < memOperands; memOp++) {
@@ -429,6 +453,7 @@ VOID Instruction(INS ins, VOID *v) {
              IARG_THREAD_ID,
              IARG_INST_PTR, IARG_MEMORYOP_EA, memOp,
              IARG_MEMORYREAD_SIZE,
+             IARG_REG_VALUE, REG_STACK_PTR,
              IARG_END);
       }
       if (INS_MemoryOperandIsWritten(ins, memOp)) {
@@ -437,6 +462,7 @@ VOID Instruction(INS ins, VOID *v) {
              IARG_THREAD_ID,
              IARG_INST_PTR, IARG_MEMORYOP_EA, memOp,
              IARG_MEMORYWRITE_SIZE,
+             IARG_REG_VALUE, REG_STACK_PTR,
              IARG_END);
       }
     }
@@ -715,18 +741,35 @@ void BeforeTaskEnd(int tid) {
 //
 VOID ImageLoad( IMG img, VOID* v) {
 
-  RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
-  RTN end_rtn = RTN_FindByName( img, "SFP_TaskEnd" );
-
-  if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
+  if ( IMG_IsMainExecutable(img) )
   {
-    cout << "replaced" << endl;
+    RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
+    RTN end_rtn = RTN_FindByName( img, "SFP_TaskEnd" );
 
-    RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
-    RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
+    if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
+    {
+      cout << "replaced" << endl;
+
+      RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
+      RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
+    }
+
+    gBrk = (ADDRINT)sbrk(0);
+    cout << "gBrk " << gBrk << endl;
   }
-
 }
+
+#if 0
+VOID SyscallEntry(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v)
+{
+  ADDRINT num = PIN_GetSyscallNumber( ctxt, std );
+  if ( num == SFP_SYSCALL_BRK )
+  {
+    gBrk = PIN_GetSyscallArgument( ctxt, std, 0 );
+    cout << "Syscall Num " << num << " gBrk " << hex << gBrk << endl;
+  }
+}
+#endif
 
 /* =====================================================
  * main routine, entry of pin tools
@@ -781,6 +824,7 @@ int main(int argc, char *argv[])
     PIN_AddThreadFiniFunction(ThreadFini, 0);
     PIN_AddFiniFunction(Fini, 0);
     IMG_AddInstrumentFunction(ImageLoad, 0);
+    //PIN_AddSyscallEntryFunction(SyscallEntry, 0);
 
     /* init thread hooks, implemented in thread_support.H */
     ThreadInit();
