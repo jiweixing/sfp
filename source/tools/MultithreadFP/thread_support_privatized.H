@@ -9,8 +9,8 @@
  *
  */
 
-#ifndef _MULTI_THREAD_FP_H_
-#define _MULTI_THREAD_FP_H_
+#ifndef _THREAD_SUPPORT_PRIVATIZED_H_
+#define _THREAD_SUPPORT_PRIVATIZED_H_
 
 #include <vector>
 #include "pin.H"
@@ -40,9 +40,10 @@ struct local_stat_t {
   /* Add thread local information and updating method here */
   bool enabled;
 
-  /* hardware time counters at ROI beginning and end */
-  uint64_t begin;
-  uint64_t end;
+  INT64 wcount[MAX_THREAD][MAX_WINDOW];
+  INT64 wcount_i[MAX_THREAD][MAX_WINDOW];
+
+  uint64_t M[MAX_THREAD];
 
   vector<int> tasks;
   int current_task; 
@@ -52,6 +53,17 @@ struct local_stat_t {
                    
   {
     tasks.push_back(0);
+    for(int i=0; i<MAX_THREAD; i++)
+    {
+
+      for(TStamp j=0; j<MAX_WINDOW; j++)
+      {
+        wcount[i][j] = 0;
+        wcount_i[i][j] = 0;
+      }
+      M[i] = 0;;
+
+    }
   }
 };
 

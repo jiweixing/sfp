@@ -10,8 +10,10 @@
 #include "pin.H"
 #include "portability.H"
 #include "histo.H"
-#include "atomic.h"
+#include "rdtsc.H"
+#include "atomic.H"
 #include "instlib.H"
+#include "sfp_list.H"
 
 using namespace std;
 using namespace histo;
@@ -24,7 +26,7 @@ using namespace INSTLIB;
                           // the lowest pillar is expected to be 2^12,
                           // therefore 2^34 / 2^12 = 2^22 = 4^11 pillars are needed
 #define MAP_SIZE 0x7fffff // if long is 64bit, size should be larger 
-#define MAX_THREAD 40     // max thread supported
+#define MAX_THREAD 10     // max thread supported
 
 #define SETSHIFT 6
 #define WORDSHIFT 6
@@ -73,13 +75,9 @@ typedef union {
 } TPStamp;
 
 /* a compact list of time stamps */
-typedef struct {
-  TStamp latest;
-  char tid;
-} TStampListElement;
 
 /* metadata associated with each datum */
-typedef list<TStampListElement> TStampList;
+typedef TList<TStamp> TStampList;
 
 /* simple bitmap type */
 typedef uint64_t TBitset;
@@ -99,10 +97,15 @@ typedef union {
   char padding[WORDWIDTH];
 } TPLock;
 
-#include "thread_support.H"
+TPLock gWcountLock[MAX_THREAD];
+
+#include "thread_support_privatized.H"
 
 struct timeval start;         // start time of profiling
 struct timeval finish;        // stop time of profiling
+
+TStamp gStartTime = 0;
+TStamp gEndTime = 0;
 
 /* the output file stream */
 ofstream ResultFile;
@@ -131,8 +134,6 @@ map<TBitset, TStamp> gPillars[MAX_PILLARS];
 /* window lengths the pillars represent */
 TStamp gPillarLengths[MAX_PILLARS];
 
-/* Brk address, the highest address for shared data */
-ADDRINT gBrk;
 
 /* ===================================================================== */
 /* Routines */
@@ -142,7 +143,7 @@ ADDRINT gBrk;
 /* ========================================================
  * SFP Algorithm Logic
  * ======================================================== */
-void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
+void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* lstat) {
 
   TStampList s;
 
@@ -155,9 +156,9 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
    * datum by this thread, following loop will
    * be skipped
    */
-  TStampList::iterator iter;
+  TStampList::Iterator curr, prev=-1;
   int thd_count = 0;
-
+#if 0
   /* following loop profiles the pillar statistics, to obtain any thread set's fp */
   for(int i=0; i<MAX_PILLARS && pos>gPillarLengths[i]; i++)
   {
@@ -167,9 +168,9 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
     TStamp high = pos - gPillarLengths[i];
     /* low is the left most point a window's left end could reach */
     TStamp low;
-    if ( !s.empty()  && s.front().latest > gPillarLengths[i] )
+    if ( s.begin()!=-1 && s.get(s.begin()) > gPillarLengths[i] )
     {
-      low = s.front().latest - gPillarLengths[i];
+      low = s.get(s.begin()) - gPillarLengths[i];
     }
     else
     {
@@ -185,17 +186,17 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
      */
     TStamp rpoint = high;
     
-    for(iter=s.begin(); iter!=s.end(); iter++)
+    for(iter=s.begin(); !s.is_end(iter); iter = s.next(iter))
     {
      /* by moving rpoint, we can determine the count of windows of
       * different sharer sets
       */
-      TStamp c = iter->latest;
+      TStamp c = s.get(iter);
 
       /* c > high means all these windows must contain thread 'iter' */
       if ( c > high )
       {
-        bitmap |= ((TBitset)1<<(iter->tid));
+        bitmap |= ((TBitset)1<<iter);
         continue;
       }
 
@@ -217,83 +218,73 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos) {
 
       /* update rpoint and bitmap */
       rpoint = c;
-      bitmap |= ((TBitset)1<<(iter->tid));
+      bitmap |= ((TBitset)1<<iter);
     }
 
     lock_acquire(&gPillarsLock[i].lock);
     gPillars[i][bitmap] += rpoint-low;
     lock_release(&gPillarsLock[i].lock);
   }
+#endif
 
-  for(iter = s.begin(); iter != s.end(); iter++) {
+  for(thd_count=0, curr = s.begin(); !s.is_end(curr); curr=s.next(curr)) {
 
     /* if we reach the last access by tid */
-    TStamp distance = pos - iter->latest - 1;
+    TStamp distance = pos - s.get(curr) - 1;
 
     /*
      * profile MI[thd_count][idx] and MI_i[thd_count][idx]
      */ 
     TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(distance);
-    __sync_add_and_fetch(&wcount[thd_count][idx], 1);
-    __sync_add_and_fetch(&wcount_i[thd_count][idx], distance);
+    lstat->wcount[thd_count][idx]++;
+    lstat->wcount_i[thd_count][idx] += distance;
 
     /* if tid is met, stop the traversal */
-    if (iter->tid == tid) {
+    if (curr == tid) {
       break;
     }
 
     /* always record the previous thread before tid */
     thd_count++;
+    prev = curr;
 
     /*
      * profile SI[thd_count][idx] and SI_i[thd_count][idx]
      * which is equivalent to decreasing MI[thd_count][idx] and MI_i[thd_count][idx]
      */ 
-    __sync_sub_and_fetch(&wcount[thd_count][idx], 1);
-    __sync_sub_and_fetch(&wcount_i[thd_count][idx], distance);
-
+    lstat->wcount[thd_count][idx]--;
+    lstat->wcount_i[thd_count][idx] -= distance;
   }
 
   /* if iter is -1, the list is traversed without finding tid,
    * then this access is first access made by tid
    */
-  if ( iter == s.end() ) {
+  if ( !s.is_end(curr) ) {
 
-    TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(pos-1);
+    if ( !s.is_end(prev) )
+    {
+      s.erase(prev, curr);
+    }
+  }
+  else {
 
     /*
      * profile MI[thd_count][idx] and MI_i[thd_count][idx]
      */ 
-    __sync_add_and_fetch(&wcount[thd_count][idx], 1);
-    __sync_add_and_fetch(&wcount_i[thd_count][idx] , pos-1);
+    TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(pos-1);
+    lstat->wcount[thd_count][idx]++;
+    lstat->wcount_i[thd_count][idx] += pos-1;
 
     /* increment the corresponding the element in M,
      * because at each level of sharing, M should be different  
      */
-    __sync_add_and_fetch(&M[thd_count].con, 1);
-  }
-  else
-  {
-    s.erase(iter);
+    lstat->M[thd_count]++;
   }
 
-  TStampListElement e = {pos, (char)tid};
-  s.push_front(e);
+
+  s.set_at(tid, pos);
+  s.set_front(tid);
   
-#if 0 
-  /* update the latest access time of tid to pos */
-  iter->latest = pos;
-  
-  /* prev is not -1, prev *MUST* points to tid's previous thread */
-  if ( prev != -1 ) {
-    s.list[prev].next = s.list[tid].next;
-    s.list[tid].next = s.head;
-  }
-
-  /* update head of the stamp list */
-  s.head = tid;
-#endif
-
   /* set back addr's time stamp list */
   gStampTbl[set_idx].set[addr] = s;
 
@@ -310,12 +301,6 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
   local_stat_t* lstat = get_tls(tid);
   if( !lstat->enabled ) return;
 
-  /* simple sampling logic */
-  __sync_fetch_and_add(&N_sample, 1);
-  if ( N_sample % SFP_SAMPLE_FREQUENCY != 0) 
-  {
-    return;
-  }
 
   /* no profiling on stack variables */
   if ( (ADDRINT)addr > sp )
@@ -328,34 +313,23 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
    * raddr is the highest cacheline base touched by interval [addr, addr+size]
    */
   ADDRINT laddr = (~WORDMASK)&((ADDRINT)addr);
-  ADDRINT raddr = laddr + size; 
 
   /* the index of set in gStampTbl */
-  ADDRINT set_idx;
+  ADDRINT set_idx = (TStamp)SetIndex(laddr);
 
   /* reserve the locks for respective entries in gStampTbl before recording global time stamp */
-  for( ADDRINT base_addr = laddr; base_addr < raddr; base_addr += SETWIDTH) {
-    lock_acquire(&gStampTbl[SetIndex(base_addr)].lock);
-  }
+  lock_acquire(&gStampTbl[set_idx].lock);
 
   /* atomic increment N, reserve next $size elements 
    * it has to be done after all $size elements are reserved
    */
-  TStamp tempN = __sync_add_and_fetch(&N, 1);
+  TStamp tempN = SFP_RDTSC() - gStartTime;
   
-  for( ADDRINT cur_addr = laddr; cur_addr < raddr; cur_addr += SETWIDTH) {
+  SfpImpl(set_idx, laddr, lstat->current_task, tempN, lstat );
 
-    set_idx = (TStamp)SetIndex(cur_addr);
+  /* release the locks on the entries associated with cur_addr */
+  lock_release(&gStampTbl[set_idx].lock);
 
-    if( cur_addr < raddr ) 
-    {
-      SfpImpl(set_idx, cur_addr, lstat->current_task, tempN);
-    }
-
-    /* release the locks on the entries associated with cur_addr */
-    lock_release(&gStampTbl[set_idx].lock);
-
-  }
 }
 
 /* =================================================
@@ -368,6 +342,7 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
 inline LOCALFUN VOID activate(THREADID tid) {
     local_stat_t* data = get_tls(tid);
     data->enabled = true;
+    __sync_bool_compare_and_swap(&gStartTime, 0, SFP_RDTSC());
 }
 
 //
@@ -376,6 +351,7 @@ inline LOCALFUN VOID activate(THREADID tid) {
 inline LOCALFUN VOID deactivate(THREADID tid) {
     local_stat_t* data = get_tls(tid);
     data->enabled = false;
+    gEndTime = SFP_RDTSC();
 }
 
 //
@@ -395,7 +371,27 @@ inline void ThreadStart_hook(THREADID tid, local_stat_t* tdata) {
 //
 // hook at thread end
 //
-inline void ThreadFini_hook(THREADID tid, local_stat_t* tdata) {
+inline void ThreadFini_hook(THREADID tid, local_stat_t* lstat) {
+
+
+  for(int i=0; i<MAX_THREAD; i++)
+  {
+    lock_acquire(&gWcountLock[i].lock);
+    //INT64* x = (INT64*)__builtin_assume_aligned(lstat->wcount[i], 64);
+    //INT64* y = (INT64*)__builtin_assume_aligned(wcount[i], 64);
+    //INT64* xi = (INT64*)__builtin_assume_aligned(lstat->wcount_i[i], 64);
+    //INT64* yi = (INT64*)__builtin_assume_aligned(wcount_i[i], 64);
+
+    for(TStamp j=0; j<MAX_WINDOW; j++)
+    {
+      wcount[i][j] += lstat->wcount[i][j];
+      wcount_i[i][j] += lstat->wcount_i[i][j];
+    }
+    //__sync_fetch_and_add(&M[i].con, lstat->M[i]);
+    M[i].con += lstat->M[i];
+    lock_release(&gWcountLock[i].lock);
+
+  }
 
 }
 
@@ -428,20 +424,6 @@ VOID Instruction(INS ins, VOID *v) {
     // On the IA-32 and Intel(R) 64 architectures conditional moves and REP
     // prefixed instructions appear as predicated instructions in Pin
     //
-
-#if 0
-    if (INS_RegWContain(ins, REG_STACK_PTR))
-    {
-      IPOINT where = IPOINT_AFTER;
-      if (!INS_HasFallThrough(ins))
-          where = IPOINT_TAKEN_BRANCH;
-
-      INS_InsertIfCall(ins, where, (AFUNPTR)OnStackChangeIf, 
-                       IARG_REG_VALUE, REG_STACK_PTR,
-                       IARG_END);
-
-    }
-#endif
 
     UINT32 memOperands = INS_MemoryOperandCount(ins);
     
@@ -500,7 +482,7 @@ VOID Trace(TRACE trace, VOID* v) {
 LOCALFUN VOID CollectLastAccesses() {
   
   int thd_count;
-  TStampList::iterator iter;
+  TStampList::Iterator curr;
 
   /* traversing all entries in gStampTbl */
   for(int i=0;i<MAP_SIZE+1;i++) {
@@ -509,7 +491,7 @@ LOCALFUN VOID CollectLastAccesses() {
     for(map<ADDRINT, TStampList>::iterator entry = gStampTbl[i].set.begin(); entry!=gStampTbl[i].set.end(); entry++) {
 
       TStampList s = entry->second;
-      
+#if 0      
       /* the logic of profiling the leftover intervals is the same in SfpImpl */
       for(int k=0; k<MAX_PILLARS && N+1>gPillarLengths[k]; k++)
       {
@@ -542,11 +524,12 @@ LOCALFUN VOID CollectLastAccesses() {
         }
         gPillars[k][bitmap] += rpoint - low;
       }
- 
-      /* traverse address's stamp's list to collect leftover intervals */
-      for(iter=s.begin(), thd_count = 0; iter!=s.end(); iter++, thd_count++) {
+#endif
 
-        TStamp distance = N - iter->latest;
+      /* traverse address's stamp's list to collect leftover intervals */
+      for(curr=s.begin(), thd_count = 0; !s.is_end(curr); curr=s.next(curr), thd_count++) {
+
+        TStamp distance = gEndTime - gStartTime - s.get(curr);
         TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(distance);
 
         /*
@@ -578,6 +561,7 @@ LOCALFUN VOID OpenOutputFile() {
 //
 // Routine for dumping the sharing graph
 //
+#if 0
 LOCALFUN VOID BuildSharingGraph()
 {
 
@@ -618,7 +602,7 @@ LOCALFUN VOID BuildSharingGraph()
     sharing_graph_file.close();
   }
 }
-
+#endif
 
 //
 // Fini routine, called at application exit
@@ -637,12 +621,13 @@ VOID Fini(INT32 code, VOID* v){
 
   TStamp j, ws;
   int i;
-  
+  N = gEndTime - gStartTime;  
+
   /* before analysis, collect the intervals left over at trace end */
   CollectLastAccesses();
 
   /* dump the sharing graph from gPillars profile */
-  BuildSharingGraph();
+  //BuildSharingGraph();
 
   /* clean up the allocated thread local data */
   ThreadEnd();
@@ -704,7 +689,7 @@ VOID Fini(INT32 code, VOID* v){
 //
 void BeforeTaskStart(int tid) {
   
-  cout << "BeforeTaskStart " << tid << endl;
+  //cout << "BeforeTaskStart " << tid << endl;
   local_stat_t* lstat = get_tls(PIN_ThreadId());
   if ( tid > MAX_THREAD )
   {
@@ -721,7 +706,7 @@ void BeforeTaskStart(int tid) {
 //
 void BeforeTaskEnd(int tid) {
 
-  cout << "BeforeTaskEnd " << tid << endl;
+  //cout << "BeforeTaskEnd " << tid << endl;
   local_stat_t* lstat = get_tls(PIN_ThreadId());
   if ( tid != lstat->current_task || tid != lstat->tasks.back() )
   {
@@ -754,8 +739,6 @@ VOID ImageLoad( IMG img, VOID* v) {
       RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
     }
 
-    gBrk = (ADDRINT)sbrk(0);
-    cout << "gBrk " << gBrk << endl;
   }
 }
 
@@ -800,6 +783,14 @@ int main(int argc, char *argv[])
     gStampTbl = new TStampTblEntry[MAP_SIZE+1];
     for(TStamp i=0; i<(MAP_SIZE+1); i++)
       lock_release(&gStampTbl[i].lock);
+
+    for(int i=0; i<MAX_THREAD; i++)
+    {
+      for(TStamp j=0; j<MAX_WINDOW; j++)
+      {
+        wcount[i][j] = wcount_i[i][j] = 0;
+      }
+    }
  
     /* allocate space for gPillars and setup pillar lengths */
     gLowestPillar = KnobLPillar.Value();

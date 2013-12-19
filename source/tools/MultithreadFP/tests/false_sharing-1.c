@@ -2,11 +2,11 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-#define data_size 4096*4096
+#define data_size 4096*256
 #define thd_num 4
 #define block_size (data_size/thd_num)
 
-int a[data_size];
+//int a[data_size];
 
 void SFP_TaskStart(int i) {
 }
@@ -27,6 +27,7 @@ int *pid;
 void* worker(void* i) {
   int id = *(int*)i;
   int y = 0;
+  int a[data_size];
 
   SFP_TaskStart(id);
   roi_begin();
@@ -45,7 +46,7 @@ int main() {
 
   int i;
 
-  printf("a is at %p to %p\n", a, a+data_size);
+  //printf("a is at %p to %p\n", a, a+data_size);
 
   pthread_t* p = (pthread_t*)malloc(thd_num*sizeof(pthread_t));
   pid = (int*)malloc(thd_num*sizeof(int));
