@@ -61,6 +61,11 @@ public:
     head = e;
   }
 
+  inline void remove_rest(Iterator e)
+  {
+    impl[(int)e].next = -1;
+  }
+
 private:
 
   Element impl[TStampListSize];

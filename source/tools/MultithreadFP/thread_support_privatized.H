@@ -45,12 +45,18 @@ struct local_stat_t {
 
   uint64_t M[MAX_THREAD];
 
+  map<TBitset, TStamp> pillars[MAX_PILLARS];
+
   vector<int> tasks;
   int current_task; 
 
+  TStamp length;
+  TStamp accum_time;
+
   local_stat_t() : enabled(false),
-                   current_task(0)
-                   
+                   current_task(0),
+                   length(0),
+                   accum_time(0)              
   {
     tasks.push_back(0);
     for(int i=0; i<MAX_THREAD; i++)

@@ -9,7 +9,7 @@
 #include "pin.H"
 #include "portability.H"
 #include "histo.H"
-#include "atomic.H"
+#include "atomic.h"
 #include "instlib.H"
 
 using namespace std;

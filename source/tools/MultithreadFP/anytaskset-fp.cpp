@@ -22,11 +22,11 @@ using namespace INSTLIB;
 /* ===================================================================== */
 /* Global Macro definitions */
 /* ===================================================================== */
-#define MAX_PILLARS 12    // the max window length is no more than 2^34, 
+#define MAX_PILLARS 8    // the max window length is no more than 2^34, 
                           // the lowest pillar is expected to be 2^12,
-                          // therefore 2^34 / 2^12 = 2^22 = 4^11 pillars are needed
+                          // therefore 2^34 / 2^12 = 2^22 = 4^11 ~= 8^6 pillars are needed
 #define MAP_SIZE 0x7fffff // if long is 64bit, size should be larger 
-#define MAX_THREAD 10     // max thread supported
+#define MAX_THREAD 26     // max thread supported
 
 #define SETSHIFT 6
 #define WORDSHIFT 6
@@ -41,6 +41,7 @@ using namespace INSTLIB;
 #define WordIndex(x) ((x)&~WORDMASK)
 
 #define SFP_SAMPLE_FREQUENCY 20
+#define SFP_LIST_TRIM_FREQUENCY 10000
 
 /* ===================================================================== */
 /* Global Variables */
@@ -55,7 +56,7 @@ KNOB<string> KnobResultFile(KNOB_MODE_WRITEONCE, "pintool",
  */
 /* knob of lowest pillar */
 KNOB<int> KnobLPillar(KNOB_MODE_WRITEONCE, "pintool",
-			 "l", "12", "specify the lowest pillar in log scale");
+			 "l", "14", "specify the lowest pillar in log scale");
 
 /* knob of sharing graph dump file */
 KNOB<string> KnobSharingGraphFile(KNOB_MODE_WRITEONCE, "pintool",
@@ -158,7 +159,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
    */
   TStampList::Iterator curr, prev=-1;
   int thd_count = 0;
-#if 0
+
   /* following loop profiles the pillar statistics, to obtain any thread set's fp */
   for(int i=0; i<MAX_PILLARS && pos>gPillarLengths[i]; i++)
   {
@@ -186,17 +187,22 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
      */
     TStamp rpoint = high;
     
-    for(iter=s.begin(); !s.is_end(iter); iter = s.next(iter))
+    for(curr=s.begin(); !s.is_end(curr); curr = s.next(curr))
     {
      /* by moving rpoint, we can determine the count of windows of
       * different sharer sets
       */
-      TStamp c = s.get(iter);
+      TStamp c = s.get(curr);
+
+      if ( pos - c > SFP_LIST_TRIM_FREQUENCY )
+      {
+        s.remove_rest(curr);
+      }
 
       /* c > high means all these windows must contain thread 'iter' */
       if ( c > high )
       {
-        bitmap |= ((TBitset)1<<iter);
+        bitmap |= ((TBitset)1<<curr);
         continue;
       }
 
@@ -212,20 +218,15 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
        * of windows with sharer pattern bitmap 
        */
       
-      lock_acquire(&gPillarsLock[i].lock);
-      gPillars[i][bitmap] += rpoint-c;
-      lock_release(&gPillarsLock[i].lock);
+      lstat->pillars[i][bitmap] += rpoint-c;
 
       /* update rpoint and bitmap */
       rpoint = c;
-      bitmap |= ((TBitset)1<<iter);
+      bitmap |= ((TBitset)1<<curr);
     }
 
-    lock_acquire(&gPillarsLock[i].lock);
-    gPillars[i][bitmap] += rpoint-low;
-    lock_release(&gPillarsLock[i].lock);
+    lstat->pillars[i][bitmap] += rpoint-low;
   }
-#endif
 
   for(thd_count=0, curr = s.begin(); !s.is_end(curr); curr=s.next(curr)) {
 
@@ -308,6 +309,9 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
     return;
   }
 
+  TStamp start = SFP_RDTSC();
+
+  lstat->length++;
   /*
    * laddr is the lowest cacheline base touched by interval [addr, addr+size]
    * raddr is the highest cacheline base touched by interval [addr, addr+size]
@@ -329,6 +333,8 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
 
   /* release the locks on the entries associated with cur_addr */
   lock_release(&gStampTbl[set_idx].lock);
+
+  lstat->accum_time += SFP_RDTSC() - start;
 
 }
 
@@ -391,6 +397,28 @@ inline void ThreadFini_hook(THREADID tid, local_stat_t* lstat) {
     M[i].con += lstat->M[i];
     lock_release(&gWcountLock[i].lock);
 
+  }
+
+
+  for(int i=0; i<MAX_PILLARS; i++)
+  {
+    lock_acquire(&gPillarsLock[i].lock);
+
+    for(map<TBitset, TStamp>::iterator iter = lstat->pillars[i].begin(); 
+        iter != lstat->pillars[i].end();
+        iter++)
+    {
+      TBitset p = iter->first;
+      TStamp  c = iter->second;
+      gPillars[i][p] += c;
+    }
+
+    lock_release(&gPillarsLock[i].lock);
+  }
+
+  if (lstat->length != 0)
+  {
+    cout << "average cycles : " << lstat->accum_time / lstat->length << endl;
   }
 
 }
@@ -491,7 +519,7 @@ LOCALFUN VOID CollectLastAccesses() {
     for(map<ADDRINT, TStampList>::iterator entry = gStampTbl[i].set.begin(); entry!=gStampTbl[i].set.end(); entry++) {
 
       TStampList s = entry->second;
-#if 0      
+
       /* the logic of profiling the leftover intervals is the same in SfpImpl */
       for(int k=0; k<MAX_PILLARS && N+1>gPillarLengths[k]; k++)
       {
@@ -499,9 +527,9 @@ LOCALFUN VOID CollectLastAccesses() {
         TStamp high = N+1-gPillarLengths[k];
         TStamp low;
 
-        if ( s.front().latest > gPillarLengths[k] )
+        if ( s.get(s.begin()) > gPillarLengths[k] )
         {
-          low = s.front().latest - gPillarLengths[k];
+          low = s.get(s.begin()) - gPillarLengths[k];
         }
         else
         {
@@ -509,22 +537,21 @@ LOCALFUN VOID CollectLastAccesses() {
         }
 
         TStamp rpoint = high;
-        for(iter=s.begin(); iter!=s.end(); iter++)
+        for(curr=s.begin(); !s.is_end(curr); curr=s.next(curr))
         {
-          TStamp c = iter->latest;
+          TStamp c = s.get(curr);
           if ( c <= low )  break;
           if ( c > high )
           {
-            bitmap |= ((TBitset)1<<(iter->tid));
+            bitmap |= ((TBitset)1<<curr);
             continue;
           }
           gPillars[k][bitmap] += rpoint-c;
           rpoint = c;
-          bitmap |= ((TBitset)1<<(iter->tid));
+          bitmap |= ((TBitset)1<<curr);
         }
         gPillars[k][bitmap] += rpoint - low;
       }
-#endif
 
       /* traverse address's stamp's list to collect leftover intervals */
       for(curr=s.begin(), thd_count = 0; !s.is_end(curr); curr=s.next(curr), thd_count++) {
@@ -561,7 +588,6 @@ LOCALFUN VOID OpenOutputFile() {
 //
 // Routine for dumping the sharing graph
 //
-#if 0
 LOCALFUN VOID BuildSharingGraph()
 {
 
@@ -602,7 +628,6 @@ LOCALFUN VOID BuildSharingGraph()
     sharing_graph_file.close();
   }
 }
-#endif
 
 //
 // Fini routine, called at application exit
@@ -627,7 +652,7 @@ VOID Fini(INT32 code, VOID* v){
   CollectLastAccesses();
 
   /* dump the sharing graph from gPillars profile */
-  //BuildSharingGraph();
+  BuildSharingGraph();
 
   /* clean up the allocated thread local data */
   ThreadEnd();
@@ -742,18 +767,6 @@ VOID ImageLoad( IMG img, VOID* v) {
   }
 }
 
-#if 0
-VOID SyscallEntry(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v)
-{
-  ADDRINT num = PIN_GetSyscallNumber( ctxt, std );
-  if ( num == SFP_SYSCALL_BRK )
-  {
-    gBrk = PIN_GetSyscallArgument( ctxt, std, 0 );
-    cout << "Syscall Num " << num << " gBrk " << hex << gBrk << endl;
-  }
-}
-#endif
-
 /* =====================================================
  * main routine, entry of pin tools
  * ===================================================== */
@@ -794,13 +807,10 @@ int main(int argc, char *argv[])
  
     /* allocate space for gPillars and setup pillar lengths */
     gLowestPillar = KnobLPillar.Value();
-    gPillarLengths[0] = 1 << gLowestPillar;
+    //gPillarLengths[0] = 1 << gLowestPillar;
     for(int i=0; i<MAX_PILLARS; i++)
     {
-      if ( i!=0 )
-      {
-        gPillarLengths[i] = gPillarLengths[i-1]*4;
-      }
+      gPillarLengths[i] = ((TStamp)1)<<(2*i+gLowestPillar);
 
       lock_release(&gPillarsLock[i].lock);
     }
@@ -815,7 +825,6 @@ int main(int argc, char *argv[])
     PIN_AddThreadFiniFunction(ThreadFini, 0);
     PIN_AddFiniFunction(Fini, 0);
     IMG_AddInstrumentFunction(ImageLoad, 0);
-    //PIN_AddSyscallEntryFunction(SyscallEntry, 0);
 
     /* init thread hooks, implemented in thread_support.H */
     ThreadInit();
