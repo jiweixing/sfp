@@ -9,9 +9,10 @@
  *
  */
 
-#ifndef _THREAD_SUPPORT_PRIVATIZED_H_
-#define _THREAD_SUPPORT_PRIVATIZED_H_
+#ifndef _THREAD_SUPPORT_SCHEDULER_H_
+#define _THREAD_SUPPORT_SCHEDULER_H_
 
+#include <vector>
 #include "pin.H"
 
 using namespace std;
@@ -39,8 +40,14 @@ struct local_stat_t {
   /* Add thread local information and updating method here */
   bool enabled;
 
-  local_stat_t() : enabled(false)
-  {}
+  vector<int> tasks;
+  int current_task; 
+
+  local_stat_t() : enabled(false),
+                   current_task(0)
+  {
+    tasks.push_back(0);
+  }
 };
 
 /* ======================================= */

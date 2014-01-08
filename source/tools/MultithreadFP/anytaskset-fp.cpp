@@ -41,7 +41,7 @@ using namespace INSTLIB;
 #define WordIndex(x) ((x)&~WORDMASK)
 
 #define SFP_SAMPLE_FREQUENCY 20
-#define SFP_LIST_TRIM_FREQUENCY 10000
+#define SFP_LIST_TRIM_FREQUENCY 100000
 
 /* ===================================================================== */
 /* Global Variables */
