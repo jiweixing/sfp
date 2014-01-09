@@ -4,6 +4,7 @@
 #include <stack>
 #include "common.H"
 #include "rdtsc.H"
+#include "atomic.H"
 
 #define MAX_TOKENS 26
 #define DEFAULT_TOKEN 0
@@ -12,13 +13,13 @@ typedef unsigned short TToken;
 
 struct TTaskDesc
 {
-  TTaskDesc(const int& _taskid) : 
+  TTaskDesc(const unsigned int& _taskid) : 
                      taskid(_taskid),
                      token(DEFAULT_TOKEN),
                      start_time(0),
                      end_time(0) {}
    
-  const int taskid;
+  const unsigned int taskid;
   TToken token;
   TStamp start_time;
   TStamp end_time;
@@ -54,14 +55,16 @@ public:
    * Constructor
    * This is the only means of constructing this object
    */
-  TTokenManager() 
+  TTokenManager() : lock(0)
   {
     taskdesc_map[0] = new TTaskDesc(0);
   }
 
+  inline void Lock() { lock_acquire(&lock); }
+  inline void Unlock() { lock_release(&lock); }
+
   inline bool get_token(TTaskDesc* td, const TToken parent)
   {
-
     for(unsigned int i=0;i<MAX_TOKENS;i++)
     {
       if(task_stack[i].empty())
@@ -91,12 +94,12 @@ public:
     return false;
   }
 
-  inline TTaskDesc* taskid_to_taskdesc(int taskid)
+  inline TTaskDesc* taskid_to_taskdesc(unsigned int taskid)
   {
-    return taskdesc_map[taskid];
+    return  taskdesc_map[taskid];
   }
 
-  inline TToken taskid_to_token(int taskid)
+  inline TToken taskid_to_token(unsigned int taskid)
   {
     return taskdesc_map[taskid]->token;
   }
@@ -116,12 +119,13 @@ public:
     current_task[token]->start_time = ts;
   }
 
-  inline TTaskDesc* get_task_descriptor(int taskid)
+  inline TTaskDesc* get_task_descriptor(unsigned int taskid)
   {
-    if ( taskdesc_map.find(taskid) != taskdesc_map.end() )
+    if ( taskdesc_map.find(taskid) != taskdesc_map.end() ) {
       return taskdesc_map[taskid];
+    }
 
-    TTaskDesc* td = new TTaskDesc(taskid);
+    TTaskDesc* td  = new TTaskDesc(taskid);
     taskdesc_map[taskid] = td;
     return td;
   }
@@ -141,6 +145,7 @@ private:
   TTaskDesc* current_task[MAX_TOKENS];
   std::map<int, TTaskDesc*> taskdesc_map;
   std::stack<TTaskDesc*> task_stack[MAX_TOKENS];
+  sfp_lock_t lock;
 
 };
 

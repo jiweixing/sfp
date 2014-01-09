@@ -98,27 +98,30 @@ LOCALFUN VOID ControlHandler(CONTROL_EVENT ev, VOID* val, CONTEXT *ctxt, VOID* i
 // The replacing routine for SFP_TaskStart
 //
 void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
-  
   TTaskDesc* own_td;
   TToken parent_token;
 
+  gTokenMgr.Lock();
   own_td = gTokenMgr.get_task_descriptor(own_id);
   parent_token = gTokenMgr.taskid_to_token(parent_id);
 
   gTokenMgr.get_token(own_td, parent_token);
 
   gTokenMgr.set_start_time(own_td->token, SFP_RDTSC());
+  gTokenMgr.Unlock();
 
 }
 
 //
 // The replacing routine for SFP_TaskEnd
 //
-void BeforeTaskEnd(int tid) {
+void BeforeTaskEnd(unsigned int tid) {
 
+  gTokenMgr.Lock();
   TToken token = gTokenMgr.taskid_to_token(tid);
   gTokenMgr.set_end_time(token, SFP_RDTSC());
   gTokenMgr.release_token(token);
+  gTokenMgr.Unlock();
 
 }
 
@@ -150,7 +153,9 @@ VOID ImageLoad( IMG img, VOID* v) {
 // Fini routine, called at application exit
 //
 VOID Fini(INT32 code, VOID* v){
+  gTokenMgr.Lock();
   gTokenMgr.dump_taskdesc();
+  gTokenMgr.Unlock();
 }
 
 /* =====================================================

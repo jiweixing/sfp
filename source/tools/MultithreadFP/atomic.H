@@ -40,32 +40,12 @@ static inline void lock_acquire(sfp_lock_t *lock) {
   }
 }
 
-static inline void sfp_lock_acquire( sfp_lock_t *lock, unsigned long long pos ) {
-  int b = 64;
-  unsigned long long index = pos>>3;
-  int mask = 1<<(pos&7);
-  if( (mask&(__sync_fetch_and_or(&lock[index], mask))) != 0) {
-    do
-    {
-      backoff(&b);
-    }
-    while( (mask&(__sync_fetch_and_or(&lock[index], mask))) != 0);
-  }
-}
 #define lock_release( lock ) *(lock) = 0
-
-static inline void sfp_lock_release( sfp_lock_t *lock, unsigned long long pos) {
-  unsigned long long index = pos>>3;
-  int mask = 1<<(pos&7);
-  __sync_fetch_and_xor(&lock[index], mask);
-}
 
 static inline void sfp_wait_flag( sfp_lock_t *flag ) {
   int b = 64;
   while ( ! *flag ) 
     backoff( &b );
 }
-
-//#define sfp_lock_clear( lock ) sfp_lock_release( (lock) )
 
 #endif
