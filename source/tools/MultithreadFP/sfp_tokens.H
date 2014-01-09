@@ -2,6 +2,8 @@
 #define SFP_TASKMGR_H
 
 #include <stack>
+#include <vector>
+#include <algorithm>
 #include "common.H"
 #include "atomic.H"
 
@@ -27,14 +29,21 @@ struct TTaskDesc
 
   void dump_node()
   {
-    std::cout << "node" << taskid << "[label = \"<f0> " 
-              << taskid << "|<f1> " << token << "\"];" << std::endl;
+
+    std::cout << "node" << taskid << "[label = \"{{<f0> " << taskid 
+              << "|<f1> " << token << "}"
+              << "|<f2> " << (start_time & 0xffffffff)
+              << "|<f3> " << (end_time & 0xffffffff)
+              << "}\"];" << std::endl;
+
   }
   
   void dump_edge()
   {
-    std::cout << "\"node" << parent << "\":f0 -> \"node" 
-              << taskid << "\":f0;" << std::endl;
+
+    std::cout << "\"node" << parent << "\" -> \"node" 
+              << taskid << "\";" << std::endl;
+ 
   }
 };
 
@@ -62,7 +71,17 @@ public:
    */
   TTokenManager() : lock(0)
   {
+    /* placeholder for task 0 */
     taskdesc_map[0] = new TTaskDesc(0);
+  }
+
+  ~TTokenManager()
+  {
+    std::map<int, TTaskDesc*>::iterator i;
+    for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
+    {
+      delete i->second;
+    }
   }
 
   inline void Lock() { lock_acquire(&lock); }
