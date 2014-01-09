@@ -104,11 +104,11 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
   gTokenMgr.Lock();
   own_td = gTokenMgr.get_task_descriptor(own_id);
   parent_token = gTokenMgr.taskid_to_token(parent_id);
-
   gTokenMgr.get_token(own_td, parent_token);
-
-  gTokenMgr.set_start_time(own_td->token, SFP_RDTSC());
   gTokenMgr.Unlock();
+
+  own_td->start_time = SFP_RDTSC();
+  own_td->parent = parent_id;
 
 }
 
@@ -119,9 +119,11 @@ void BeforeTaskEnd(unsigned int tid) {
 
   gTokenMgr.Lock();
   TToken token = gTokenMgr.taskid_to_token(tid);
-  gTokenMgr.set_end_time(token, SFP_RDTSC());
+  TTaskDesc* td = gTokenMgr.get_task_descriptor(tid);
   gTokenMgr.release_token(token);
   gTokenMgr.Unlock();
+ 
+  td->end_time = SFP_RDTSC();
 
 }
 

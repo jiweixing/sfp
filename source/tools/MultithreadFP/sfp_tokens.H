@@ -3,7 +3,6 @@
 
 #include <stack>
 #include "common.H"
-#include "rdtsc.H"
 #include "atomic.H"
 
 #define MAX_TOKENS 26
@@ -15,21 +14,27 @@ struct TTaskDesc
 {
   TTaskDesc(const unsigned int& _taskid) : 
                      taskid(_taskid),
+                     parent(0),
                      token(DEFAULT_TOKEN),
                      start_time(0),
                      end_time(0) {}
-   
+
   const unsigned int taskid;
+  unsigned int parent;
   TToken token;
   TStamp start_time;
   TStamp end_time;
 
-  void dump()
+  void dump_node()
   {
-    std::cout << "[" << taskid << "] "
-              << "-> " << token << " "
-              << "(" << start_time << ", " << end_time << ")"
-              << std::endl;
+    std::cout << "node" << taskid << "[label = \"<f0> " 
+              << taskid << "|<f1> " << token << "\"];" << std::endl;
+  }
+  
+  void dump_edge()
+  {
+    std::cout << "\"node" << parent << "\":f0 -> \"node" 
+              << taskid << "\":f0;" << std::endl;
   }
 };
 
@@ -109,16 +114,6 @@ public:
     return current_task[token];
   }
 
-  inline void set_end_time(TToken token, TStamp ts)
-  {
-    current_task[token]->end_time = ts;
-  }
-
-  inline void set_start_time(TToken token, TStamp ts)
-  {
-    current_task[token]->start_time = ts;
-  }
-
   inline TTaskDesc* get_task_descriptor(unsigned int taskid)
   {
     if ( taskdesc_map.find(taskid) != taskdesc_map.end() ) {
@@ -133,11 +128,22 @@ public:
   inline void dump_taskdesc()
   {
     std::map<int, TTaskDesc*>::iterator i;
+
+    std::cout << "digraph g {" << endl;
+    std::cout << "node [shape = record,height=.1];" << endl;
+
     for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
     {
       TTaskDesc* td = i->second;
-      td->dump();
+      td->dump_node();
     }
+    for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
+    {
+      TTaskDesc* td = i->second;
+      td->dump_edge();
+    }
+
+    std::cout << "}" << std::endl;
   }
 
 private:
