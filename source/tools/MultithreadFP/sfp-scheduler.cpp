@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <functional>
 
 #include "pin.H"
 #include "common.H"
@@ -127,6 +128,11 @@ void BeforeTaskEnd(unsigned int tid) {
 
 }
 
+void GetTaskID(const void* taskid_addr)
+{
+  std::cout << *(unsigned int*)taskid_addr << std::endl;
+}
+
 //
 // Replacing SFP_TaskStart and SFP_TaskEnd to
 // get the user provided task id
@@ -139,13 +145,13 @@ VOID ImageLoad( IMG img, VOID* v) {
   {
     RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
     RTN end_rtn = RTN_FindByName( img, "SFP_TaskEnd" );
+    RTN taskid_rtn = RTN_FindByName( img, "SFP_GetTaskID" );
 
     if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
     {
-      cout << "replaced" << endl;
-
       RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
       RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
+      RTN_Replace(taskid_rtn,AFUNPTR(GetTaskID));
     }
 
   }
@@ -155,9 +161,9 @@ VOID ImageLoad( IMG img, VOID* v) {
 // Fini routine, called at application exit
 //
 VOID Fini(INT32 code, VOID* v){
-  gTokenMgr.Lock();
-  gTokenMgr.dump_taskdesc();
-  gTokenMgr.Unlock();
+  //gTokenMgr.Lock();
+  //gTokenMgr.dump_taskdesc();
+  //gTokenMgr.Unlock();
 }
 
 /* =====================================================
