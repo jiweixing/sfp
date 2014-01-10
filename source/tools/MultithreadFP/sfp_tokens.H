@@ -135,7 +135,7 @@ public:
 
   inline TTaskDesc* get_task_descriptor(unsigned int taskid)
   {
-    if ( taskdesc_map.find(taskid) != taskdesc_map.end() ) {
+    if ( task_started(taskid) ) {
       return taskdesc_map[taskid];
     }
 
@@ -144,6 +144,9 @@ public:
     return td;
   }
 
+  inline bool task_started(unsigned int taskid) const
+  { return taskdesc_map.find(taskid) != taskdesc_map.end(); } 
+    
   inline void dump_taskdesc()
   {
     std::map<int, TTaskDesc*>::iterator i;

@@ -37,17 +37,37 @@ unsigned gThreadNum = 0;
 /* thread local data */
 struct local_stat_t {
 
-  /* Add thread local information and updating method here */
-  bool enabled;
+private:
 
-  vector<int> tasks;
-  int current_task; 
+  /* instrumentation start flag */
+  bool instrument_enabled;
 
-  local_stat_t() : enabled(false),
-                   current_task(0)
-  {
-    tasks.push_back(0);
-  }
+  /* task ID inspection start flag */
+  bool taskid_inspect_enabled;
+  
+  /* The address where current task id is stored */
+  const unsigned int* taskid_ptr;
+
+public:
+
+  /* Constructor */
+  local_stat_t() : instrument_enabled(false),
+                   taskid_inspect_enabled(false)
+  {}
+
+  inline void enable_instrument() { instrument_enabled = true; }
+  inline void disable_instrument() { instrument_enabled = false; }
+  inline void enable_taskid_inspect() { taskid_inspect_enabled = true; }
+  inline void disable_taskid_inspect() { taskid_inspect_enabled = false; }
+
+  inline void set_taskid_ptr(const unsigned int* taskid_addr) 
+  { taskid_ptr = taskid_addr; }
+
+  inline bool is_taskid_inspect_enabled() const 
+  { return taskid_inspect_enabled; }
+  
+  inline unsigned int current_taskid() const { return *taskid_ptr; }
+
 };
 
 /* ======================================= */

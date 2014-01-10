@@ -46,16 +46,16 @@ TTokenManager gTokenMgr;
 // activate instrumentation and recording
 //
 inline LOCALFUN VOID activate(THREADID tid) {
-    local_stat_t* data = get_tls(tid);
-    data->enabled = true;
+  local_stat_t* data = get_tls(tid);
+  data->enable_instrument();
 }
 
 //
 // deactivate instrumentation and recording
 //
 inline LOCALFUN VOID deactivate(THREADID tid) {
-    local_stat_t* data = get_tls(tid);
-    data->enabled = false;
+  local_stat_t* data = get_tls(tid);
+  data->disable_instrument();
 }
 
 //
@@ -95,6 +95,22 @@ LOCALFUN VOID ControlHandler(CONTROL_EVENT ev, VOID* val, CONTEXT *ctxt, VOID* i
  * Rountines for instrumentation
  * ================================================== */
 
+LOCALFUN VOID InsExec(INS ins, void* v) {
+  local_stat_t* tdata = get_tls(PIN_ThreadId());
+  if (tdata->is_taskid_inspect_enabled())
+  {
+    unsigned int taskid = tdata->current_taskid();
+    TToken t;
+    gTokenMgr.Lock();
+    if ( gTokenMgr.task_started(taskid) ) {
+      t = gTokenMgr.taskid_to_token(taskid);
+      std::cout << taskid << " " << t << std::endl;
+    }
+    gTokenMgr.Unlock();
+    
+  }
+} 
+
 //
 // The replacing routine for SFP_TaskStart
 //
@@ -128,9 +144,11 @@ void BeforeTaskEnd(unsigned int tid) {
 
 }
 
-void GetTaskID(const void* taskid_addr)
+void StoreTaskIDAddr(const void* taskid_addr)
 {
-  std::cout << *(unsigned int*)taskid_addr << std::endl;
+  local_stat_t* ldata = get_tls(PIN_ThreadId());
+  ldata->set_taskid_ptr(static_cast<const unsigned int*>(taskid_addr));
+  ldata->enable_taskid_inspect();
 }
 
 //
@@ -145,13 +163,13 @@ VOID ImageLoad( IMG img, VOID* v) {
   {
     RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
     RTN end_rtn = RTN_FindByName( img, "SFP_TaskEnd" );
-    RTN taskid_rtn = RTN_FindByName( img, "SFP_GetTaskID" );
+    RTN taskid_rtn = RTN_FindByName( img, "SFP_GetTaskIDAddr" );
 
     if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
     {
       RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
       RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
-      RTN_Replace(taskid_rtn,AFUNPTR(GetTaskID));
+      RTN_Replace(taskid_rtn,AFUNPTR(StoreTaskIDAddr));
     }
 
   }
@@ -200,6 +218,7 @@ int main(int argc, char *argv[])
     PIN_AddThreadFiniFunction(ThreadFini, 0);
     PIN_AddFiniFunction(Fini, 0);
     IMG_AddInstrumentFunction(ImageLoad, 0);
+    INS_AddInstrumentFunction(InsExec,0);
 
     /* init thread hooks, implemented in thread_support.H */
     ThreadInit();
