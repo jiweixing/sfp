@@ -36,81 +36,87 @@ TTokenManager gTokenMgr;
 /* ===================================================================== */
 /* Routines */
 /* ===================================================================== */
-
-
-/* =================================================
- * Routines for instrumentation controlling
- * ================================================= */
-
-//
-// activate instrumentation and recording
-//
-inline LOCALFUN VOID activate(THREADID tid) {
-  local_stat_t* data = get_tls(tid);
-  data->enable_instrument();
-}
-
-//
-// deactivate instrumentation and recording
-//
-inline LOCALFUN VOID deactivate(THREADID tid) {
-  local_stat_t* data = get_tls(tid);
-  data->disable_instrument();
-}
-
-//
-// hook at thread launch
-//
-inline void ThreadStart_hook(THREADID tid, local_stat_t* tdata) {
-  // FIXME: the controller starts all threads if no trigger conditions
-  // are specified, but currently it only starts TID0. Starting here
-  // is wrong if the controller has a nontrivial start condition, but
-  // this is what most people want. They can always stop the controller
-  // and using markers as a workaround
-  if(tid) {
-    activate(tid);
+VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp)
+{
+  /* no profiling on stack variables */
+  if ( (ADDRINT)addr > sp )
+  {
+    return;
   }
-}
-
-inline void ThreadFini_hook(THREADID tid, local_stat_t* tdata) {
-}
-
-//
-// callbacks of control handler
-//
-LOCALFUN VOID ControlHandler(CONTROL_EVENT ev, VOID* val, CONTEXT *ctxt, VOID* ip, THREADID tid) {
-  switch(ev) {
-    case CONTROL_START: // start
-      activate(tid);
-      break;
-    case CONTROL_STOP:  // stop
-      deactivate(tid);
-      break;
-    default:
-      ASSERTX(false);
-  }
-}
-
-/* ==================================================
- * Rountines for instrumentation
- * ================================================== */
-
-LOCALFUN VOID InsExec(INS ins, void* v) {
-  local_stat_t* tdata = get_tls(PIN_ThreadId());
+  local_stat_t* tdata = get_tls(tid);
   if (tdata->is_taskid_inspect_enabled())
   {
     unsigned int taskid = tdata->current_taskid();
-    TToken t;
-    gTokenMgr.Lock();
-    if ( gTokenMgr.task_started(taskid) ) {
-      t = gTokenMgr.taskid_to_token(taskid);
-      std::cout << taskid << " " << t << std::endl;
+     
+    //TToken t;
+    gTokenMgr.ReadLock();
+    if ( gTokenMgr.is_task_running(taskid) ) {
+      gTokenMgr.taskid_to_token(taskid);
     }
     gTokenMgr.Unlock();
     
   }
 } 
 
+/* =================================================
+ * Routines for instrumentation controlling
+ * ================================================= */
+//
+// hook at thread launch
+//
+inline void ThreadStart_hook(THREADID tid, local_stat_t* tdata) {
+}
+
+inline void ThreadFini_hook(THREADID tid, local_stat_t* tdata) {
+}
+
+/* ==================================================
+ * Rountines for instrumentation
+ * ================================================== */
+
+LOCALFUN VOID Instruction(INS ins, void* v) {
+
+  /**
+   *  Instruments memory accesses using a predicated call, i.e.
+   *  the instrumentation is called iff the instruction will actually be executed.
+   *
+   *  On the IA-32 and Intel(R) 64 architectures conditional moves and REP 
+   *  prefixed instructions appear as predicated instructions in Pin.
+   */
+  UINT32 memOperands = INS_MemoryOperandCount(ins);
+
+  /* Iterate over each memory operand of the instruction. */
+  for (UINT32 memOp = 0; memOp < memOperands; memOp++)
+  {
+    if (INS_MemoryOperandIsRead(ins, memOp))
+    {
+      INS_InsertPredicatedCall(
+          ins, IPOINT_BEFORE, (AFUNPTR)InstructionExec,
+          IARG_THREAD_ID,
+          IARG_INST_PTR,
+          IARG_MEMORYOP_EA, memOp,
+          IARG_MEMORYREAD_SIZE,
+          IARG_REG_VALUE, REG_STACK_PTR,
+          IARG_END);
+    }
+   /**
+    * Note that in some architectures a single memory operand can be 
+    * both read and written (for instance incl (%eax) on IA-32)
+    * In that case we instrument it once for read and once for write.
+    */
+    if (INS_MemoryOperandIsWritten(ins, memOp)) {
+      INS_InsertPredicatedCall(
+          ins, IPOINT_BEFORE, (AFUNPTR)InstructionExec,
+          IARG_THREAD_ID,
+          IARG_INST_PTR, 
+          IARG_MEMORYOP_EA, memOp,
+          IARG_MEMORYWRITE_SIZE,
+          IARG_REG_VALUE, REG_STACK_PTR,
+          IARG_END);
+    }
+  }
+}
+  
 //
 // The replacing routine for SFP_TaskStart
 //
@@ -118,14 +124,15 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
   TTaskDesc* own_td;
   TToken parent_token;
 
-  gTokenMgr.Lock();
+  gTokenMgr.WriteLock();
   own_td = gTokenMgr.get_task_descriptor(own_id);
   parent_token = gTokenMgr.taskid_to_token(parent_id);
   gTokenMgr.get_token(own_td, parent_token);
   gTokenMgr.Unlock();
 
-  own_td->start_time = SFP_RDTSC();
   own_td->parent = parent_id;
+  own_td->enable_instrument();
+  own_td->start_time = SFP_RDTSC();
 
 }
 
@@ -134,13 +141,14 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
 //
 void BeforeTaskEnd(unsigned int tid) {
 
-  gTokenMgr.Lock();
+  gTokenMgr.WriteLock();
   TToken token = gTokenMgr.taskid_to_token(tid);
   TTaskDesc* td = gTokenMgr.get_task_descriptor(tid);
   gTokenMgr.release_token(token);
   gTokenMgr.Unlock();
  
   td->end_time = SFP_RDTSC();
+  td->disable_instrument();
 
 }
 
@@ -179,9 +187,7 @@ VOID ImageLoad( IMG img, VOID* v) {
 // Fini routine, called at application exit
 //
 VOID Fini(INT32 code, VOID* v){
-  //gTokenMgr.Lock();
   //gTokenMgr.dump_taskdesc();
-  //gTokenMgr.Unlock();
 }
 
 /* =====================================================
@@ -210,15 +216,15 @@ int main(int argc, char *argv[])
     }
 
     /* check for knobs if region instrumentation is involved */
-    control.RegisterHandler(ControlHandler, 0, FALSE);
-    control.Activate();
+//    control.RegisterHandler(ControlHandler, 0, FALSE);
+//    control.Activate();
 
     /* register callbacks */
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
     PIN_AddFiniFunction(Fini, 0);
     IMG_AddInstrumentFunction(ImageLoad, 0);
-    INS_AddInstrumentFunction(InsExec,0);
+    INS_AddInstrumentFunction(Instruction,0);
 
     /* init thread hooks, implemented in thread_support.H */
     ThreadInit();

@@ -5,7 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include "common.H"
-#include "atomic.H"
+#include "pin.H"
 
 #define MAX_TOKENS 26
 #define DEFAULT_TOKEN 0
@@ -19,13 +19,19 @@ struct TTaskDesc
                      parent(0),
                      token(DEFAULT_TOKEN),
                      start_time(0),
-                     end_time(0) {}
+                     end_time(0),
+                     instrument_enabled(false) {}
 
   const unsigned int taskid;
   unsigned int parent;
   TToken token;
   TStamp start_time;
   TStamp end_time;
+  bool instrument_enabled;
+
+  inline void enable_instrument() { instrument_enabled = true; }
+  inline void disable_instrument() { instrument_enabled = false; }
+  inline bool is_instrument_enabled() const { return instrument_enabled; }
 
   void dump_node()
   {
@@ -69,10 +75,13 @@ public:
    * Constructor
    * This is the only means of constructing this object
    */
-  TTokenManager() : lock(0)
+  TTokenManager()
   {
     /* placeholder for task 0 */
     taskdesc_map[0] = new TTaskDesc(0);
+
+    /* RWMutex initialization */
+    PIN_RWMutexInit(&rwlock);
   }
 
   ~TTokenManager()
@@ -82,10 +91,15 @@ public:
     {
       delete i->second;
     }
+
+    /* RWMutex Fini */
+    PIN_RWMutexFini(&rwlock);
+
   }
 
-  inline void Lock() { lock_acquire(&lock); }
-  inline void Unlock() { lock_release(&lock); }
+  inline void ReadLock() { PIN_RWMutexReadLock(&rwlock); }
+  inline void WriteLock() { PIN_RWMutexWriteLock(&rwlock); }
+  inline void Unlock() { PIN_RWMutexUnlock(&rwlock); }
 
   inline bool get_token(TTaskDesc* td, const TToken parent)
   {
@@ -135,7 +149,7 @@ public:
 
   inline TTaskDesc* get_task_descriptor(unsigned int taskid)
   {
-    if ( task_started(taskid) ) {
+    if ( taskdesc_map.find(taskid)!=taskdesc_map.end() ) {
       return taskdesc_map[taskid];
     }
 
@@ -144,8 +158,15 @@ public:
     return td;
   }
 
-  inline bool task_started(unsigned int taskid) const
-  { return taskdesc_map.find(taskid) != taskdesc_map.end(); } 
+  inline bool is_task_running(unsigned int taskid)
+  { 
+    if (taskdesc_map.find(taskid) != taskdesc_map.end())
+    {
+      TTaskDesc* td = taskdesc_map[taskid];
+      return td->is_instrument_enabled();
+    }
+    return false; 
+  } 
     
   inline void dump_taskdesc()
   {
@@ -173,7 +194,7 @@ private:
   TTaskDesc* current_task[MAX_TOKENS];
   std::map<int, TTaskDesc*> taskdesc_map;
   std::stack<TTaskDesc*> task_stack[MAX_TOKENS];
-  sfp_lock_t lock;
+  PIN_RWMUTEX rwlock;
 
 };
 

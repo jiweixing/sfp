@@ -55,8 +55,6 @@ public:
                    taskid_inspect_enabled(false)
   {}
 
-  inline void enable_instrument() { instrument_enabled = true; }
-  inline void disable_instrument() { instrument_enabled = false; }
   inline void enable_taskid_inspect() { taskid_inspect_enabled = true; }
   inline void disable_taskid_inspect() { taskid_inspect_enabled = false; }
 
