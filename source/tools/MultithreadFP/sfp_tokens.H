@@ -2,12 +2,10 @@
 #define SFP_TASKMGR_H
 
 #include <stack>
-#include <vector>
-#include <algorithm>
+#include <map>
 #include "common.H"
 #include "pin.H"
 
-#define MAX_TOKENS 26
 #define DEFAULT_TOKEN 0
 
 typedef unsigned short TToken;
@@ -33,22 +31,22 @@ struct TTaskDesc
   inline void disable_instrument() { instrument_enabled = false; }
   inline bool is_instrument_enabled() const { return instrument_enabled; }
 
-  void dump_node()
+  void dump_node(ostream& out) const
   {
 
-    std::cout << "node" << taskid << "[label = \"{{<f0> " << taskid 
-              << "|<f1> " << token << "}"
-              << "|<f2> " << (start_time & 0xffffffff)
-              << "|<f3> " << (end_time & 0xffffffff)
-              << "}\"];" << std::endl;
+    out << "node" << taskid << "[label = \"{{<f0> " << taskid 
+        << "|<f1> " << token << "}"
+        << "|<f2> " << (start_time )
+        << "|<f3> " << (end_time )
+        << "}\"];\n";
 
   }
   
-  void dump_edge()
+  void dump_edge(ostream& out) const
   {
 
-    std::cout << "\"node" << parent << "\" -> \"node" 
-              << taskid << "\";" << std::endl;
+    out << "\"node" << parent << "\" -> \"node" 
+        << taskid << "\";\n";
  
   }
 };
@@ -137,7 +135,7 @@ public:
     return  taskdesc_map[taskid];
   }
 
-  inline TToken taskid_to_token(unsigned int taskid)
+  inline const TToken& taskid_to_token(unsigned int taskid)
   {
     return taskdesc_map[taskid]->token;
   }
@@ -168,25 +166,25 @@ public:
     return false; 
   } 
     
-  inline void dump_taskdesc()
+  inline void dump_taskdesc(ostream& out)
   {
     std::map<int, TTaskDesc*>::iterator i;
 
-    std::cout << "digraph g {" << endl;
-    std::cout << "node [shape = record,height=.1];" << endl;
+    out << "digraph g {\n";
+    out << "node [shape = record,height=.1];\n";
 
     for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
     {
       TTaskDesc* td = i->second;
-      td->dump_node();
+      td->dump_node(out);
     }
     for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
     {
       TTaskDesc* td = i->second;
-      td->dump_edge();
+      td->dump_edge(out);
     }
 
-    std::cout << "}" << std::endl;
+    out << "}\n";
   }
 
 private:

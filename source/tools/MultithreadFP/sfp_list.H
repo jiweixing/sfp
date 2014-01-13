@@ -1,7 +1,7 @@
 #ifndef _SFP_LIST_H_
 #define _SFP_LIST_H_
 
-#define TStampListSize 24
+#include "common.H"
 
 template<typename T>
 class TList
@@ -18,7 +18,7 @@ public:
   TList()
   {
     head = -1;
-    for(int i=0; i < TStampListSize; i++)
+    for(int i=0; i < MAX_LIST_ENTRIES; i++)
     {
       impl[i].next = -1;
     }
@@ -68,7 +68,7 @@ public:
 
 private:
 
-  Element impl[TStampListSize];
+  Element impl[MAX_LIST_ENTRIES];
   Iterator head;
 
 };

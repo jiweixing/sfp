@@ -1,6 +1,8 @@
 #ifndef _SFP_RDTSC_H_
 #define _SFP_RDTSC_H_
 
+#include <stdint.h>
+
 uint64_t __inline__ SFP_RDTSC() {
   unsigned int hi, lo;
   __asm__ volatile("xor %%eax, %%eax\n\t"

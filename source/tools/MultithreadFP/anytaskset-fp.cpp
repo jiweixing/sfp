@@ -67,7 +67,7 @@ KNOB<string> KnobSharingGraphFile(KNOB_MODE_WRITEONCE, "pintool",
 LOCALVAR CONTROL control;
 
 /* time stamp type */
-typedef UINT64 TStamp;
+//typedef UINT64 TStamp;
 
 /* cacheline padded time stamp type */
 typedef union {

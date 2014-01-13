@@ -1,37 +1,37 @@
 #include <iostream>
-#include <fstream>
 #include <stdlib.h>
-#include <map>
-#include <sys/time.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <functional>
 
 #include "pin.H"
 #include "common.H"
 #include "portability.H"
-#include "histo.H"
 #include "rdtsc.H"
 #include "atomic.H"
-#include "instlib.H"
 #include "sfp_list.H"
 #include "sfp_tokens.H"
+#include "sfp_stamp_table.H"
 #include "thread_support_scheduler.H"
 
 using namespace std;
-using namespace histo;
-using namespace INSTLIB;
+
+class TSFPList : public TList<UINT32>
+{
+public:
+  
+  void update(TToken token, TStamp time, local_stat_t* lstat)
+  {
+  }
+
+};
 
 /* ===================================================================== */
 /* Global Variables */
 /* ===================================================================== */
 
-/* control variable */
-LOCALVAR CONTROL control;
-
 /* token manager */
 TTokenManager gTokenMgr;
+
+/* stamp manager */
+TStampTblManager<TSFPList> gStampTblMgr;
 
 /* ===================================================================== */
 /* Routines */
@@ -43,16 +43,43 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
   {
     return;
   }
+
   local_stat_t* tdata = get_tls(tid);
   if (tdata->is_taskid_inspect_enabled())
   {
     unsigned int taskid = tdata->current_taskid();
      
-    //TToken t;
     gTokenMgr.ReadLock();
     if ( gTokenMgr.is_task_running(taskid) ) {
-      gTokenMgr.taskid_to_token(taskid);
+
+      TToken current_token = gTokenMgr.taskid_to_token(taskid);
+
+      /* release token manager lock after obtaining the token */
+      gTokenMgr.Unlock();
+      
+      /* the base address aligned at cache line boundary */
+      ADDRINT base_addr = gStampTblMgr.get_base_addr((ADDRINT)addr);
+      
+      /* the index of set in stamp table */
+      ADDRINT set_idx = gStampTblMgr.get_index(base_addr);
+
+      /* reserve the lock for entry in stamp table before recording time stamp */
+      gStampTblMgr.Lock(set_idx);
+
+      /* update time stamp info for the entry  */
+      //TStampTblManager::TStampList& s = gTStampStampTblMgr.get_stamp_list(set_idx, base_addr);
+      TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
+
+      /* update record */
+      s.update(current_token, SFP_RDTSC(), tdata);
+
+      /* release lock */
+      gStampTblMgr.Unlock(set_idx);
+      
+      return;
     }
+
+    /* if current task is not running (in TaskStart and TaskEnd region) right now */
     gTokenMgr.Unlock();
     
   }
@@ -132,7 +159,7 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
 
   own_td->parent = parent_id;
   own_td->enable_instrument();
-  own_td->start_time = SFP_RDTSC();
+  own_td->start_time = SFP_RDTSC() / (1<<10);
 
 }
 
@@ -147,7 +174,7 @@ void BeforeTaskEnd(unsigned int tid) {
   gTokenMgr.release_token(token);
   gTokenMgr.Unlock();
  
-  td->end_time = SFP_RDTSC();
+  td->end_time = SFP_RDTSC() / (1<<10);
   td->disable_instrument();
 
 }
@@ -186,8 +213,8 @@ VOID ImageLoad( IMG img, VOID* v) {
 //
 // Fini routine, called at application exit
 //
-VOID Fini(INT32 code, VOID* v){
-  //gTokenMgr.dump_taskdesc();
+VOID Fini(INT32 code, VOID* v) {
+  gTokenMgr.dump_taskdesc(std::cout);
 }
 
 /* =====================================================
