@@ -2,8 +2,9 @@
 #include <stdlib.h>
 
 #include "pin.H"
-#include "common.H"
 #include "portability.H"
+
+#include "common.H"
 #include "rdtsc.H"
 #include "atomic.H"
 #include "sfp_list.H"
@@ -13,12 +14,13 @@
 
 using namespace std;
 
-class TSFPList : public TList<UINT32>
+class TSFPList : public TList<UINT64>
 {
 public:
   
-  void update(TToken token, TStamp time, local_stat_t* lstat)
+  void update(TToken token, TStamp now, TStamp start, local_stat_t* lstat)
   {
+    
   }
 
 };
@@ -52,11 +54,14 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
     gTokenMgr.ReadLock();
     if ( gTokenMgr.is_task_running(taskid) ) {
 
-      TToken current_token = gTokenMgr.taskid_to_token(taskid);
+      TTaskDesc* td = gTokenMgr.get_task_descriptor(taskid);
 
-      /* release token manager lock after obtaining the token */
+      /* release token manager lock after obtaining the task descriptor */
       gTokenMgr.Unlock();
-      
+
+      TToken current_token = td->token;
+      TStamp start_time = td->start_time;
+
       /* the base address aligned at cache line boundary */
       ADDRINT base_addr = gStampTblMgr.get_base_addr((ADDRINT)addr);
       
@@ -67,11 +72,10 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       gStampTblMgr.Lock(set_idx);
 
       /* update time stamp info for the entry  */
-      //TStampTblManager::TStampList& s = gTStampStampTblMgr.get_stamp_list(set_idx, base_addr);
       TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
 
       /* update record */
-      s.update(current_token, SFP_RDTSC(), tdata);
+      s.update(current_token, SFP_RDTSC(), start_time, tdata);
 
       /* release lock */
       gStampTblMgr.Unlock(set_idx);
@@ -153,13 +157,13 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
 
   gTokenMgr.WriteLock();
   own_td = gTokenMgr.get_task_descriptor(own_id);
-  parent_token = gTokenMgr.taskid_to_token(parent_id);
+  parent_token = own_td->parent;
   gTokenMgr.get_token(own_td, parent_token);
   gTokenMgr.Unlock();
 
   own_td->parent = parent_id;
   own_td->enable_instrument();
-  own_td->start_time = SFP_RDTSC() / (1<<10);
+  own_td->start_time = SFP_RDTSC();
 
 }
 
@@ -169,12 +173,13 @@ void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
 void BeforeTaskEnd(unsigned int tid) {
 
   gTokenMgr.WriteLock();
-  TToken token = gTokenMgr.taskid_to_token(tid);
   TTaskDesc* td = gTokenMgr.get_task_descriptor(tid);
+  TToken token = td->token; 
   gTokenMgr.release_token(token);
   gTokenMgr.Unlock();
  
-  td->end_time = SFP_RDTSC() / (1<<10);
+  td->end_time = SFP_RDTSC();
+  td->times.push_back(std::make_pair(td->start_time, td->end_time));
   td->disable_instrument();
 
 }

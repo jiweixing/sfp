@@ -6,7 +6,10 @@
 /* time stamp type */
 typedef UINT64 TStamp;
 
-#define MAX_TOKENS 24
+/* simple bitmap type */
+typedef UINT32 TBitset;
+
+#define MAX_TOKENS 8
 
 #define MAX_LIST_ENTRIES MAX_TOKENS
 

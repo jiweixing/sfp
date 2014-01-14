@@ -1,9 +1,12 @@
 #ifndef SFP_TASKMGR_H
 #define SFP_TASKMGR_H
 
-#include <stack>
-#include <map>
+#include <stack>    // std::stack
+#include <vector>   // std::vector
+#include <utility>  // std::pair
+#include <map>      // std::map
 #include "common.H"
+#include "sfp_locality_desc.H"
 #include "pin.H"
 
 #define DEFAULT_TOKEN 0
@@ -25,6 +28,8 @@ struct TTaskDesc
   TToken token;
   TStamp start_time;
   TStamp end_time;
+  std::vector<std::pair<TStamp, TStamp> > times;
+  TLocalityDesc ldesc;
   bool instrument_enabled;
 
   inline void enable_instrument() { instrument_enabled = true; }
@@ -133,11 +138,6 @@ public:
   inline TTaskDesc* taskid_to_taskdesc(unsigned int taskid)
   {
     return  taskdesc_map[taskid];
-  }
-
-  inline const TToken& taskid_to_token(unsigned int taskid)
-  {
-    return taskdesc_map[taskid]->token;
   }
 
   inline TTaskDesc* token_to_task(TToken token)
