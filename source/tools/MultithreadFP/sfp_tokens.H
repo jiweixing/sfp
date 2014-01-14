@@ -1,7 +1,7 @@
 #ifndef SFP_TASKMGR_H
 #define SFP_TASKMGR_H
 
-#include <stack>    // std::stack
+#include <set>    // std::stack
 #include <vector>   // std::vector
 #include <utility>  // std::pair
 #include <map>      // std::map
@@ -89,7 +89,7 @@ public:
 
   ~TTokenManager()
   {
-    std::map<int, TTaskDesc*>::iterator i;
+    std::map<unsigned int, TTaskDesc*>::iterator i;
     for( i = taskdesc_map.begin(); i != taskdesc_map.end(); i++)
     {
       delete i->second;
@@ -106,43 +106,34 @@ public:
 
   inline bool get_token(TTaskDesc* td, const TToken parent)
   {
-    for(unsigned int i=0;i<MAX_TOKENS;i++)
+    for(int i=0;i<MAX_TOKENS;i++)
     {
       if(task_stack[i].empty())
       {
-        current_task[i] = td;
-        task_stack[i].push(td);
+        task_stack[i].insert(td->taskid);
         td->token = (TToken)i;
         return true;
       }
     }
 
-    current_task[parent] = td;
-    task_stack[parent].push(td);
+    task_stack[parent].insert(td->taskid);
     td->token = parent;
     return false;
   }
 
-  inline bool release_token(TToken token)
+  inline bool release_token(TToken token, unsigned int tid)
   {
-    task_stack[token].pop();
+    task_stack[token].erase(tid);
     if(task_stack[token].empty())
     {
-      current_task[token] = 0;
       return true;
     }
-    current_task[token] = task_stack[token].top();
     return false;
   }
 
   inline TTaskDesc* taskid_to_taskdesc(unsigned int taskid)
   {
     return  taskdesc_map[taskid];
-  }
-
-  inline TTaskDesc* token_to_task(TToken token)
-  {
-    return current_task[token];
   }
 
   inline TTaskDesc* get_task_descriptor(unsigned int taskid)
@@ -168,7 +159,7 @@ public:
     
   inline void dump_taskdesc(ostream& out)
   {
-    std::map<int, TTaskDesc*>::iterator i;
+    std::map<unsigned int, TTaskDesc*>::iterator i;
 
     out << "digraph g {\n";
     out << "node [shape = record,height=.1];\n";
@@ -189,9 +180,8 @@ public:
 
 private:
 
-  TTaskDesc* current_task[MAX_TOKENS];
-  std::map<int, TTaskDesc*> taskdesc_map;
-  std::stack<TTaskDesc*> task_stack[MAX_TOKENS];
+  std::map<unsigned int, TTaskDesc*> taskdesc_map;
+  std::set<unsigned int> task_stack[MAX_TOKENS];
   PIN_RWMUTEX rwlock;
 
 };

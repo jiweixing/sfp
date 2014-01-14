@@ -11,6 +11,10 @@ typedef UINT32 TBitset;
 
 #define MAX_TOKENS 8
 
+#define BITSET_CAP (1<<MAX_TOKENS)
+
+#define LOCALITY_DESC_MAX_INDEX 16
+
 #define MAX_LIST_ENTRIES MAX_TOKENS
 
 #endif

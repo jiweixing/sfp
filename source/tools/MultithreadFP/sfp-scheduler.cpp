@@ -10,6 +10,7 @@
 #include "sfp_list.H"
 #include "sfp_tokens.H"
 #include "sfp_stamp_table.H"
+#include "sfp_locality_desc.H"
 #include "thread_support_scheduler.H"
 
 using namespace std;
@@ -18,9 +19,11 @@ class TSFPList : public TList<UINT64>
 {
 public:
   
-  void update(TToken token, TStamp now, TStamp start, local_stat_t* lstat)
+  void update(TToken token, TStamp now, TTaskDesc* td)
   {
-    
+    TLocalityDesc& ld = td->ldesc;
+    TStamp start = td->start_time;
+    /* TODO profiling */
   }
 
 };
@@ -34,6 +37,9 @@ TTokenManager gTokenMgr;
 
 /* stamp manager */
 TStampTblManager<TSFPList> gStampTblMgr;
+
+/* TODO global locality description */
+//TLocalityDesc gLocalityDesc;
 
 /* ===================================================================== */
 /* Routines */
@@ -60,7 +66,6 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       gTokenMgr.Unlock();
 
       TToken current_token = td->token;
-      TStamp start_time = td->start_time;
 
       /* the base address aligned at cache line boundary */
       ADDRINT base_addr = gStampTblMgr.get_base_addr((ADDRINT)addr);
@@ -75,7 +80,7 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
 
       /* update record */
-      s.update(current_token, SFP_RDTSC(), start_time, tdata);
+      s.update(current_token, SFP_RDTSC(), td);
 
       /* release lock */
       gStampTblMgr.Unlock(set_idx);
@@ -175,7 +180,7 @@ void BeforeTaskEnd(unsigned int tid) {
   gTokenMgr.WriteLock();
   TTaskDesc* td = gTokenMgr.get_task_descriptor(tid);
   TToken token = td->token; 
-  gTokenMgr.release_token(token);
+  gTokenMgr.release_token(token, tid);
   gTokenMgr.Unlock();
  
   td->end_time = SFP_RDTSC();

@@ -1,64 +1,44 @@
 #ifndef SFP_LOCALITY_DESC_H
 #define SFP_LOCALITY_DESC_H
 
-#include <map>
-
 #include "portability.H"
 #include "common.H"
 
+#include <cstring>
+
 class TLocalityDesc {
 
-private:
-
-  typedef std::vector<int> profile_type;
 
 public:
   
-  TLocalityDesc() : nIndices(16)
-  {
-    lengths = new TStamp[nIndices];
-  }
+  static inline void set_length(int idx, TStamp len)
+  { TLocalityDesc::lengths[idx] = len; }
 
-  TLocalityDesc(const int& indices)
+  inline void add(TBitset bits, const TStamp& len, const INT64& val)
   {
-    nIndices = indices;
-    lengths = new TStamp[nIndices];
-  }
-
-  TLocalityDesc(const std::vector<TStamp>& other)
-  {
-    nIndices = other.size();
-    lengths = new TStamp[nIndices];
-    for(int i=0;i<nIndices;i++)
-    { lengths[i] = other[i]; }
-  }
-
-  ~TLocalityDesc()
-  {
-    delete[] lengths;
-  }
-
-  inline void set_length(int idx, TStamp len)
-  { lengths[idx] = len; }
-
-  inline void add(TBitset bits, const TStamp& len, const int& val)
-  {
-    if (impl.find(bits) == impl.end())
-    {
-      impl[bits] = profile_type(nIndices, 0);
-    }
     int idx = profile_length_to_index(len);
-    impl[bits][idx] += val;
+    impl[bits*MAX_INDEX + idx] += val;
   }
 
   inline int get(TBitset bits, const TStamp& len)
   {
-    if (impl.find(bits) == impl.end())
-    {
-      return 0;
-    }
     int idx = profile_length_to_index(len);
-    return impl[bits][idx];
+    return impl[bits*MAX_INDEX + idx];
+  }
+
+  TLocalityDesc& operator=(TLocalityDesc other)
+  {
+    memcpy(impl, other.impl, BITSET_CAP*MAX_INDEX*sizeof(INT64));
+    return *this;
+  }
+
+  TLocalityDesc& diff(const TLocalityDesc& other)
+  {
+    for(int i=0; i<BITSET_CAP*MAX_INDEX; i++)
+    {
+      impl[i] = other[i] - impl[i];
+    }
+    return *this;
   }
     
 private:
@@ -66,20 +46,19 @@ private:
   inline const int     profile_length_to_index( const TStamp& len )
   {
     /* TODO add logic to search proper index for a given length */
-    if ( len > lengths[nIndices-1] ) return nIndices-1;
-    if ( len < lengths[0] ) return 0;
+    if ( len > TLocalityDesc::lengths[MAX_INDEX-1] ) return MAX_INDEX-1;
+    if ( len < TLocalityDesc::lengths[0] ) return 0;
     
-    return (len-lengths[0]) * (nIndices-1) / (lengths[nIndices-1]-lengths[0]); 
+    return (len-TLocalityDesc::lengths[0]) * (MAX_INDEX-1) / (TLocalityDesc::lengths[MAX_INDEX-1]-TLocalityDesc::lengths[0]); 
   }
 
   inline const TStamp  profile_index_to_length( const int&    idx )
-  { return lengths[idx]; }
+  { return TLocalityDesc::lengths[idx]; }
 
 private:
 
-  std::map<TBitset, profile_type> impl;
-  TStamp* lengths;
-  int nIndices;
+  INT64 impl[BITSET_CAP * MAX_INDEX];
+  static TStamp lengths[MAX_INDEX];
 
 };
 
