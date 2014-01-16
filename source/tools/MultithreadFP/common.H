@@ -9,6 +9,9 @@ typedef UINT64 TStamp;
 /* simple bitmap type */
 typedef UINT32 TBitset;
 
+#define MEMOP_WRITE 1
+#define MEMOP_READ  2
+
 #define MAX_TOKENS 8
 
 #define BITSET_CAP (1<<MAX_TOKENS)

@@ -15,15 +15,42 @@
 
 using namespace std;
 
-class TSFPList : public TList<UINT64>
+struct TSFPListEntry {
+  TStamp time;
+  THREADID id;
+};
+
+class TSFPList : public TList<TSFPListEntry>
 {
 public:
   
-  void update(TToken token, TStamp now, TTaskDesc* td)
+  void update(TToken token, TStamp now, TTaskDesc* td, UINT32 type)
   {
     TLocalityDesc& ld = td->ldesc;
-    TStamp start = td->start_time;
     /* TODO profiling */
+
+    TBitset bitset = 0;
+    TSFPList::Iterator curr;
+    for(curr=begin(); !is_end(curr); curr = next(curr))
+    {
+      TSFPListEntry e = get(curr);
+      TStamp len = now - e.time;
+      bitset |= (1<<curr);
+      ld.add(bitset, len, 1);
+    }
+  
+    TSFPListEntry e;
+    e.time = now;
+    set_at(token, e);
+    set_front(token);
+  
+/*
+    if ( type == MEMOP_WRITE )
+    {
+      latest_write_time = now;
+      latest_writer = token;
+    }
+*/
   }
 
 };
@@ -38,13 +65,13 @@ TTokenManager gTokenMgr;
 /* stamp manager */
 TStampTblManager<TSFPList> gStampTblMgr;
 
-/* TODO global locality description */
-//TLocalityDesc gLocalityDesc;
+/* global locality description */
+TLocalityDesc gLocalityDesc;
 
 /* ===================================================================== */
 /* Routines */
 /* ===================================================================== */
-VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp)
+VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp, UINT32 type)
 {
   /* no profiling on stack variables */
   if ( (ADDRINT)addr > sp )
@@ -80,7 +107,7 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
 
       /* update record */
-      s.update(current_token, SFP_RDTSC(), td);
+      s.update(current_token, SFP_RDTSC(), td, type);
 
       /* release lock */
       gStampTblMgr.Unlock(set_idx);
@@ -133,6 +160,7 @@ LOCALFUN VOID Instruction(INS ins, void* v) {
           IARG_MEMORYOP_EA, memOp,
           IARG_MEMORYREAD_SIZE,
           IARG_REG_VALUE, REG_STACK_PTR,
+          IARG_UINT32, MEMOP_READ,
           IARG_END);
     }
    /**
@@ -148,6 +176,7 @@ LOCALFUN VOID Instruction(INS ins, void* v) {
           IARG_MEMORYOP_EA, memOp,
           IARG_MEMORYWRITE_SIZE,
           IARG_REG_VALUE, REG_STACK_PTR,
+          IARG_UINT32, MEMOP_WRITE,
           IARG_END);
     }
   }
