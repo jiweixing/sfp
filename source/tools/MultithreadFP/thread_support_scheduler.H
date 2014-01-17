@@ -42,29 +42,24 @@ private:
   /* instrumentation start flag */
   bool instrument_enabled;
 
-  /* task ID inspection start flag */
-  bool taskid_inspect_enabled;
-  
-  /* The address where current task id is stored */
-  const unsigned int* taskid_ptr;
+  short group;
 
 public:
 
+  TLocalityDesc ld;
+
   /* Constructor */
-  local_stat_t() : instrument_enabled(false),
-                   taskid_inspect_enabled(false)
+  local_stat_t() : instrument_enabled(false)
   {}
 
-  inline void enable_taskid_inspect() { taskid_inspect_enabled = true; }
-  inline void disable_taskid_inspect() { taskid_inspect_enabled = false; }
+  inline void enable_instrument() { instrument_enabled = true; }
+  inline void disable_instrument() { instrument_enabled = false; }
 
-  inline void set_taskid_ptr(const unsigned int* taskid_addr) 
-  { taskid_ptr = taskid_addr; }
+  inline void set_group(short group_) { group = group_; }
+  inline short get_group() { return group; }
 
-  inline bool is_taskid_inspect_enabled() const 
-  { return taskid_inspect_enabled; }
-  
-  inline unsigned int current_taskid() const { return *taskid_ptr; }
+  inline bool is_instrument_enabled() const 
+  { return instrument_enabled; }
 
 };
 

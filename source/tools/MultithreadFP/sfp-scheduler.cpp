@@ -8,7 +8,6 @@
 #include "rdtsc.H"
 #include "atomic.H"
 #include "sfp_list.H"
-#include "sfp_tokens.H"
 #include "sfp_stamp_table.H"
 #include "sfp_locality_desc.H"
 #include "thread_support_scheduler.H"
@@ -16,41 +15,70 @@
 using namespace std;
 
 struct TSFPListEntry {
-  TStamp time;
-  THREADID id;
+  uint32_t time;
+  short group;
 };
 
 class TSFPList : public TList<TSFPListEntry>
 {
 public:
   
-  void update(TToken token, TStamp now, TTaskDesc* td, UINT32 type)
+  void update(local_stat_t* ldata, THREADID tid, uint32_t now, UINT32 type)
   {
-    TLocalityDesc& ld = td->ldesc;
     /* TODO profiling */
 
-    TBitset bitset = 0;
     TSFPList::Iterator curr;
-    for(curr=begin(); !is_end(curr); curr = next(curr))
+    for(int i=0; i<LOCALITY_DESC_MAX_INDEX; i++)
     {
-      TSFPListEntry e = get(curr);
-      TStamp len = now - e.time;
-      bitset |= (1<<curr);
-      ld.add(bitset, len, 1);
+      TBitset bitset = 0;
+      uint32_t len = TLocalityDesc::profile_index_to_length(i);
+      uint32_t high = now - len;
+      uint32_t low = 0;
+      curr = begin();
+      if ( !is_end(curr) && get(curr).time > len )
+      {
+        low = get(curr).time - len;
+      }
+      uint32_t rpoint = high;
+      for(curr=begin(); !is_end(curr); curr = next(curr))
+      {
+
+        uint32_t c = get(curr).time;
+        if ( c > high )
+        {
+          bitset |= (1<<tid);
+          continue;
+        }
+        if ( c <= low ) break;
+        ldata->ld.add(bitset, i, rpoint-c);
+     
+        rpoint = c;
+        bitset |= (1<<tid);
+
+      }
+
+      ldata->ld.add(bitset, i, rpoint-low);
     }
   
     TSFPListEntry e;
     e.time = now;
-    set_at(token, e);
-    set_front(token);
-  
-/*
-    if ( type == MEMOP_WRITE )
+    set_at(tid, e);
+    
+    TSFPList::Iterator prev = -1;
+    for(curr = begin(); !is_end(curr); prev = curr, curr = next(curr))
     {
-      latest_write_time = now;
-      latest_writer = token;
+      if ( curr == (TSFPList::Iterator)tid) break;
     }
-*/
+    
+    if ( !is_end(curr) ) {
+
+      if ( !is_end(prev) )
+      {
+        erase(prev, curr);
+      }
+    }
+    set_front(tid);
+  
   }
 
 };
@@ -58,9 +86,6 @@ public:
 /* ===================================================================== */
 /* Global Variables */
 /* ===================================================================== */
-
-/* token manager */
-TTokenManager gTokenMgr;
 
 /* stamp manager */
 TStampTblManager<TSFPList> gStampTblMgr;
@@ -79,20 +104,11 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
     return;
   }
 
+  if ( DONT_SAMPLE((uint32_t)SFP_RDTSC()) ) return;
+
   local_stat_t* tdata = get_tls(tid);
-  if (tdata->is_taskid_inspect_enabled())
+  if (tdata->is_instrument_enabled())
   {
-    unsigned int taskid = tdata->current_taskid();
-     
-    gTokenMgr.ReadLock();
-    if ( gTokenMgr.is_task_running(taskid) ) {
-
-      TTaskDesc* td = gTokenMgr.get_task_descriptor(taskid);
-
-      /* release token manager lock after obtaining the task descriptor */
-      gTokenMgr.Unlock();
-
-      TToken current_token = td->token;
 
       /* the base address aligned at cache line boundary */
       ADDRINT base_addr = gStampTblMgr.get_base_addr((ADDRINT)addr);
@@ -107,16 +123,10 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
 
       /* update record */
-      s.update(current_token, SFP_RDTSC(), td, type);
+      s.update(tdata, tid, (uint32_t)(SFP_RDTSC()>>10), type);
 
       /* release lock */
       gStampTblMgr.Unlock(set_idx);
-      
-      return;
-    }
-
-    /* if current task is not running (in TaskStart and TaskEnd region) right now */
-    gTokenMgr.Unlock();
     
   }
 } 
@@ -185,44 +195,22 @@ LOCALFUN VOID Instruction(INS ins, void* v) {
 //
 // The replacing routine for SFP_TaskStart
 //
-void BeforeTaskStart(unsigned int own_id, unsigned int parent_id) {
-  TTaskDesc* own_td;
-  TToken parent_token;
-
-  gTokenMgr.WriteLock();
-  own_td = gTokenMgr.get_task_descriptor(own_id);
-  parent_token = own_td->parent;
-  gTokenMgr.get_token(own_td, parent_token);
-  gTokenMgr.Unlock();
-
-  own_td->parent = parent_id;
-  own_td->enable_instrument();
-  own_td->start_time = SFP_RDTSC();
+void BeforeTaskStart(short group) {
+  
+  local_stat_t* tdata = get_tls(PIN_ThreadId());
+  tdata->set_group(group);
+  tdata->enable_instrument();
 
 }
 
 //
 // The replacing routine for SFP_TaskEnd
 //
-void BeforeTaskEnd(unsigned int tid) {
+void BeforeTaskEnd() {
 
-  gTokenMgr.WriteLock();
-  TTaskDesc* td = gTokenMgr.get_task_descriptor(tid);
-  TToken token = td->token; 
-  gTokenMgr.release_token(token, tid);
-  gTokenMgr.Unlock();
- 
-  td->end_time = SFP_RDTSC();
-  td->times.push_back(std::make_pair(td->start_time, td->end_time));
-  td->disable_instrument();
+  local_stat_t* tdata = get_tls(PIN_ThreadId());
+  tdata->disable_instrument();
 
-}
-
-void StoreTaskIDAddr(const void* taskid_addr)
-{
-  local_stat_t* ldata = get_tls(PIN_ThreadId());
-  ldata->set_taskid_ptr(static_cast<const unsigned int*>(taskid_addr));
-  ldata->enable_taskid_inspect();
 }
 
 //
@@ -237,13 +225,11 @@ VOID ImageLoad( IMG img, VOID* v) {
   {
     RTN start_rtn = RTN_FindByName( img, "SFP_TaskStart" );
     RTN end_rtn = RTN_FindByName( img, "SFP_TaskEnd" );
-    RTN taskid_rtn = RTN_FindByName( img, "SFP_GetTaskIDAddr" );
 
     if (RTN_Valid(start_rtn) && RTN_Valid(end_rtn))
     {
       RTN_Replace(start_rtn, AFUNPTR(BeforeTaskStart));
       RTN_Replace(end_rtn,   AFUNPTR(BeforeTaskEnd));
-      RTN_Replace(taskid_rtn,AFUNPTR(StoreTaskIDAddr));
     }
 
   }
@@ -253,7 +239,6 @@ VOID ImageLoad( IMG img, VOID* v) {
 // Fini routine, called at application exit
 //
 VOID Fini(INT32 code, VOID* v) {
-  gTokenMgr.dump_taskdesc(std::cout);
 }
 
 /* =====================================================

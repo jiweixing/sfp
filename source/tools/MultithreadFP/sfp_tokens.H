@@ -11,7 +11,6 @@
 
 #define DEFAULT_TOKEN 0
 
-typedef unsigned short TToken;
 
 struct TTaskDesc
 {

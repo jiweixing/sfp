@@ -5,30 +5,28 @@
 #include "common.H"
 
 #include <cstring>
-#include <string.h> // ffsll
+#include <string.h> // ffsl
 
 class TLocalityDesc {
 
 public:
   
-  static inline void set_length(int idx, TStamp len)
+  static inline void set_length(int idx, uint32_t len)
   { TLocalityDesc::lengths[idx] = len; }
 
-  inline void add(TBitset bits, const TStamp& len, const INT64& val)
+  inline void add(TBitset bits, const int& idx, const INT64& val)
   {
-    int idx = profile_length_to_index(len);
     impl[bits*LOCALITY_DESC_MAX_INDEX + idx] += val;
   }
 
-  inline int get(TBitset bits, const TStamp& len)
+  inline int get(TBitset bits, const int& idx)
   {
-    int idx = profile_length_to_index(len);
     return impl[bits*LOCALITY_DESC_MAX_INDEX + idx];
   }
 
   TLocalityDesc& operator=(TLocalityDesc other)
   {
-    memcpy(impl, other.impl, BITSET_CAP*LOCALITY_DESC_MAX_INDEX*sizeof(INT64));
+    memcpy(impl, other.impl, BITSET_CAP*LOCALITY_DESC_MAX_INDEX*sizeof(uint32_t));
     return *this;
   }
 
@@ -41,30 +39,29 @@ public:
     return *this;
   }
     
-private:
 
-  inline const int     profile_length_to_index( const TStamp& len )
+  inline static const int     profile_length_to_index( const uint32_t& len )
   {
     /* TODO add logic to search proper index for a given length */
 /*
     if ( len > TLocalityDesc::lengths[MAX_INDEX-1] ) return MAX_INDEX-1;
+
     if ( len < TLocalityDesc::lengths[0] ) return 0;
     
     return (len-TLocalityDesc::lengths[0]) * (MAX_INDEX-1) / (TLocalityDesc::lengths[MAX_INDEX-1]-TLocalityDesc::lengths[0]); 
 */
-    if ( ffsll(len) > 40 ) return 15;
-    if ( ffsll(len) < 24 ) return 24;
-    return ffsll(len) - 24;
+    if ( len>(1<<(4*LOCALITY_DESC_MAX_INDEX)) ) return (1<<(4*LOCALITY_DESC_MAX_INDEX));
+    return ffsl(len) / 4;
   }
 
-  inline const TStamp  profile_index_to_length( const int&    idx )
+  inline static const uint32_t  profile_index_to_length( const int&    idx )
 //  { return TLocalityDesc::lengths[idx]; }
-  { return (TStamp)1<<(24+idx); }
+  { return 1<<(idx<<2); }
 
 private:
 
-  INT64 impl[BITSET_CAP * LOCALITY_DESC_MAX_INDEX];
-  static TStamp lengths[LOCALITY_DESC_MAX_INDEX];
+  uint32_t impl[BITSET_CAP * LOCALITY_DESC_MAX_INDEX];
+  static uint32_t lengths[LOCALITY_DESC_MAX_INDEX];
 
 };
 

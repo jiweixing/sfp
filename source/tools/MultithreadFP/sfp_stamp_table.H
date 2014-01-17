@@ -58,7 +58,10 @@ public:
   inline void Lock(ADDRINT set_idx) { lock_acquire(&impl[set_idx].lock); }
   inline void Unlock(ADDRINT set_idx) { lock_release(&impl[set_idx].lock); }
 
-  T& get_stamp_list(const ADDRINT& set_idx, const ADDRINT& base_addr);
+  inline T& get_stamp_list(const ADDRINT& set_idx, const ADDRINT& base_addr)
+  {
+    return impl[set_idx].set[base_addr];
+  }
 
 private:
 
