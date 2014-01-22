@@ -8,6 +8,7 @@
 #include "rdtsc.H"
 #include "atomic.H"
 #include "sfp_list.H"
+#include "sfp_stage.H"
 #include "sfp_stamp_table.H"
 #include "sfp_locality_desc.H"
 #include "thread_support_scheduler.H"
@@ -16,14 +17,13 @@ using namespace std;
 
 struct TSFPListEntry {
   uint32_t time;
-  short group;
 };
 
 class TSFPList : public TList<TSFPListEntry>
 {
 public:
   
-  void update(local_stat_t* ldata, THREADID tid, uint32_t now, UINT32 type)
+  void update(local_stat_t* ldata, short tid, uint32_t now, UINT32 type)
   {
     /* TODO profiling */
 
@@ -93,6 +93,12 @@ TStampTblManager<TSFPList> gStampTblMgr;
 /* global locality description */
 TLocalityDesc gLocalityDesc;
 
+/* stage registry manager */
+TStageManager gStageMgr;
+
+/* instrument switch */
+volatile bool doInstrument;
+
 /* ===================================================================== */
 /* Routines */
 /* ===================================================================== */
@@ -104,9 +110,18 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
     return;
   }
 
-  if ( DONT_SAMPLE((uint32_t)SFP_RDTSC()) ) return;
+  //if ( DONT_SAMPLE((uint32_t)SFP_RDTSC()) ) return;
 
   local_stat_t* tdata = get_tls(tid);
+  short stage = tdata->get_stage();
+
+  gStageMgr.ReadLock();
+  if(tid != gStageMgr.GetRegisteredThread(stage)) {
+    gStageMgr.Unlock();
+    return;
+  }
+  gStageMgr.Unlock();
+
   if (tdata->is_instrument_enabled())
   {
 
@@ -120,10 +135,8 @@ VOID InstructionExec(THREADID tid, VOID* ip, VOID* addr, UINT32 size, ADDRINT sp
       gStampTblMgr.Lock(set_idx);
 
       /* update time stamp info for the entry  */
-      TSFPList& s = gStampTblMgr.get_stamp_list(set_idx, base_addr);
-
-      /* update record */
-      s.update(tdata, tid, (uint32_t)(SFP_RDTSC()>>10), type);
+      TSFPList& e = gStampTblMgr.get_stamp_list(set_idx, base_addr);
+      e.update(tdata, stage, (uint32_t)(SFP_RDTSC()>>10), type);
 
       /* release lock */
       gStampTblMgr.Unlock(set_idx);
@@ -148,6 +161,9 @@ inline void ThreadFini_hook(THREADID tid, local_stat_t* tdata) {
  * ================================================== */
 
 LOCALFUN VOID Instruction(INS ins, void* v) {
+
+  /* check instrument switch */
+  if (!doInstrument) return;
 
   /**
    *  Instruments memory accesses using a predicated call, i.e.
@@ -195,10 +211,17 @@ LOCALFUN VOID Instruction(INS ins, void* v) {
 //
 // The replacing routine for SFP_TaskStart
 //
-void BeforeTaskStart(short group) {
+void BeforeTaskStart(short stage) {
   
-  local_stat_t* tdata = get_tls(PIN_ThreadId());
-  tdata->set_group(group);
+  THREADID tid = PIN_ThreadId();
+  local_stat_t* tdata = get_tls(tid);
+  tdata->set_stage(stage);
+
+  /* register thread for this stage */
+  gStageMgr.WriteLock();
+  gStageMgr.TryRegisterThread(stage, tid);
+  gStageMgr.Unlock();
+
   tdata->enable_instrument();
 
 }
@@ -206,10 +229,18 @@ void BeforeTaskStart(short group) {
 //
 // The replacing routine for SFP_TaskEnd
 //
-void BeforeTaskEnd() {
+void BeforeTaskEnd(short stage) {
 
-  local_stat_t* tdata = get_tls(PIN_ThreadId());
+  THREADID tid = PIN_ThreadId();
+  local_stat_t* tdata = get_tls(tid);
+
   tdata->disable_instrument();
+
+  /* unregister thread for this stage */
+  gStageMgr.WriteLock();
+  gStageMgr.TryUnregisterThread(stage, tid);
+  gStageMgr.Unlock();
+  
 
 }
 
@@ -241,6 +272,16 @@ VOID ImageLoad( IMG img, VOID* v) {
 VOID Fini(INT32 code, VOID* v) {
 }
 
+VOID TimerThread(void* arg) {
+  while(1) {
+    __sync_bool_compare_and_swap(&doInstrument, true, false);
+    PIN_RemoveInstrumentation();
+    PIN_Sleep(20000);
+    __sync_bool_compare_and_swap(&doInstrument, false, true);
+    PIN_RemoveInstrumentation();
+    PIN_Sleep(1000);
+  }
+}
 /* =====================================================
  * main routine, entry of pin tools
  * ===================================================== */
@@ -266,10 +307,6 @@ int main(int argc, char *argv[])
         return Usage();
     }
 
-    /* check for knobs if region instrumentation is involved */
-//    control.RegisterHandler(ControlHandler, 0, FALSE);
-//    control.Activate();
-
     /* register callbacks */
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
@@ -279,6 +316,10 @@ int main(int argc, char *argv[])
 
     /* init thread hooks, implemented in thread_support.H */
     ThreadInit();
+
+    /* spawn timer thread */
+    PIN_THREAD_UID ptid;
+    PIN_SpawnInternalThread(TimerThread, 0, 0, &ptid);
 
     // Never returns
     PIN_StartProgram();

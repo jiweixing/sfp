@@ -42,7 +42,7 @@ private:
   /* instrumentation start flag */
   bool instrument_enabled;
 
-  short group;
+  short stage;
 
 public:
 
@@ -55,8 +55,8 @@ public:
   inline void enable_instrument() { instrument_enabled = true; }
   inline void disable_instrument() { instrument_enabled = false; }
 
-  inline void set_group(short group_) { group = group_; }
-  inline short get_group() { return group; }
+  inline void set_stage(short stage_) { stage = stage_; }
+  inline short get_stage() { return stage; }
 
   inline bool is_instrument_enabled() const 
   { return instrument_enabled; }

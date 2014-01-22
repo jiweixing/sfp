@@ -23,8 +23,9 @@ typedef unsigned short TToken;
 
 #define MAX_LIST_ENTRIES 16
 
+/*
 #define SAMPLE_FREQ 0x100000             // sampling period 2^20 cycles
 #define SAMPLE_LEN  (SAMPLE_FREQ >> 5)  // sampling rate, 1/(2^5) = 1/32
 #define DONT_SAMPLE(cycles) (((cycles)&(SAMPLE_FREQ-1)) > ((cycles)&(SAMPLE_LEN-1)))
-
+*/
 #endif
