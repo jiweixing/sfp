@@ -12,6 +12,7 @@
 #ifndef _THREAD_SUPPORT_PRIVATIZED_H_
 #define _THREAD_SUPPORT_PRIVATIZED_H_
 
+#include <vector>
 #include "pin.H"
 
 using namespace std;
@@ -39,8 +40,44 @@ struct local_stat_t {
   /* Add thread local information and updating method here */
   bool enabled;
 
-  local_stat_t() : enabled(false)
-  {}
+  uint64_t last;
+
+  INT64 wcount[MAX_THREAD][MAX_WINDOW];
+  INT64 wcount_i[MAX_THREAD][MAX_WINDOW];
+  INT64 per_wcount[MAX_WINDOW];
+  INT64 per_wcount_i[MAX_WINDOW];
+
+  uint64_t M[MAX_THREAD];
+  uint64_t per_M;
+
+  map<TBitset, TStamp> pillars[MAX_PILLARS];
+
+  vector<int> tasks;
+  int current_task; 
+
+  TStamp length;
+  TStamp accum_time;
+
+  local_stat_t() : enabled(false),
+                   last(0),
+                   per_M(0),
+                   current_task(0),
+                   length(0),
+                   accum_time(0)
+  {
+    tasks.push_back(0);
+    for(int i=0; i<MAX_THREAD; i++)
+    {
+
+      for(TStamp j=0; j<MAX_WINDOW; j++)
+      {
+        wcount[i][j] = 0;
+        wcount_i[i][j] = 0;
+      }
+      M[i] = 0;;
+
+    }
+  }
 };
 
 /* ======================================= */

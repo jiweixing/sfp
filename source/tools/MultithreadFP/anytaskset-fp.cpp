@@ -40,8 +40,8 @@ using namespace INSTLIB;
 #define SetIndex(x) (((x)>>SETSHIFT)&MAP_SIZE)
 #define WordIndex(x) ((x)&~WORDMASK)
 
-#define SFP_SAMPLE_FREQUENCY 20
-#define SFP_LIST_TRIM_FREQUENCY 100000
+//#define SFP_SAMPLE_FREQUENCY 20
+//#define SFP_LIST_TRIM_FREQUENCY 100000
 
 /* ===================================================================== */
 /* Global Variables */
@@ -67,7 +67,7 @@ KNOB<string> KnobSharingGraphFile(KNOB_MODE_WRITEONCE, "pintool",
 LOCALVAR CONTROL control;
 
 /* time stamp type */
-//typedef UINT64 TStamp;
+typedef UINT64 TStamp;
 
 /* cacheline padded time stamp type */
 typedef union {
@@ -81,7 +81,7 @@ typedef union {
 typedef TList<TStamp> TStampList;
 
 /* simple bitmap type */
-typedef uint64_t TBitset;
+typedef UINT32 TBitset;
 
 /* configures used in histo.H */
 const  uint32_t              SUBLOG_BITS = 8;
@@ -89,7 +89,7 @@ const  uint32_t              MAX_WINDOW = (65-SUBLOG_BITS)*(1<<SUBLOG_BITS);
 
 /* time stamp table entry, each entry is a set of time stamps */ 
 typedef struct {
-  sfp_lock_t lock;
+  PIN_MUTEX lock;
   map<ADDRINT, TStampList> set;
 } TStampTblEntry;
 
@@ -110,6 +110,7 @@ TStamp gEndTime = 0;
 
 /* the output file stream */
 ofstream ResultFile;
+ofstream PerThreadResultFile;
 
 /* the global wall time */
 TStamp gWalltime;
@@ -117,9 +118,13 @@ TStamp gWalltime;
 volatile static TStamp N = 0; // trace length
 volatile static TStamp N_sample = 0; // trace length
 TPStamp M[MAX_THREAD];        // total memory footprint for each thread count
+TStamp per_M[MAX_THREAD];        // total access count for each thread
 
 INT64 wcount[MAX_THREAD][MAX_WINDOW];
 INT64 wcount_i[MAX_THREAD][MAX_WINDOW];
+
+INT64 per_wcount[MAX_THREAD][MAX_WINDOW];
+INT64 per_wcount_i[MAX_THREAD][MAX_WINDOW];
 
 /* global stamp table */
 TStampTblEntry* gStampTbl;
@@ -161,6 +166,7 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
   int thd_count = 0;
 
   /* following loop profiles the pillar statistics, to obtain any thread set's fp */
+
   for(int i=0; i<MAX_PILLARS && pos>gPillarLengths[i]; i++)
   {
     TBitset bitmap = 0;
@@ -194,11 +200,6 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
       */
       TStamp c = s.get(curr);
 
-      if ( pos - c > SFP_LIST_TRIM_FREQUENCY )
-      {
-        s.remove_rest(curr);
-      }
-
       /* c > high means all these windows must contain thread 'iter' */
       if ( c > high )
       {
@@ -227,6 +228,8 @@ void SfpImpl(ADDRINT set_idx, ADDRINT addr, int tid, TStamp pos, local_stat_t* l
 
     lstat->pillars[i][bitmap] += rpoint-low;
   }
+
+  /* profiling anyk-sfp statistics in following loop */
 
   for(thd_count=0, curr = s.begin(); !s.is_end(curr); curr=s.next(curr)) {
 
@@ -304,10 +307,10 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
 
 
   /* no profiling on stack variables */
-  if ( (ADDRINT)addr > sp )
-  {
-    return;
-  }
+  //if ( (ADDRINT)addr > sp )
+  //{
+  //  return;
+  //}
 
   TStamp start = SFP_RDTSC();
 
@@ -318,21 +321,31 @@ VOID RecordMem(THREADID tid, VOID * ip, VOID * addr, UINT32 size, UINT32 type, A
    */
   ADDRINT laddr = (~WORDMASK)&((ADDRINT)addr);
 
+  
   /* the index of set in gStampTbl */
   ADDRINT set_idx = (TStamp)SetIndex(laddr);
 
   /* reserve the locks for respective entries in gStampTbl before recording global time stamp */
-  lock_acquire(&gStampTbl[set_idx].lock);
+  //lock_acquire(&gStampTbl[set_idx].lock);
+  //if(!PIN_MutexTryLock(&gStampTbl[set_idx].lock)) return;
+  PIN_MutexLock(&gStampTbl[set_idx].lock);
 
   /* atomic increment N, reserve next $size elements 
    * it has to be done after all $size elements are reserved
    */
   TStamp tempN = SFP_RDTSC() - gStartTime;
   
-  SfpImpl(set_idx, laddr, lstat->current_task, tempN, lstat );
+  SfpImpl(set_idx, laddr, tid, tempN, lstat );
+
+  /* record access frequency */
+  TStamp idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(tempN);
+  lstat->per_wcount[idx]++;
+  lstat->per_wcount_i[idx] += tempN; //sublog_index_to_value<MAX_WINDOW, SUBLOG_BITS>(idx);
+  lstat->per_M++;
 
   /* release the locks on the entries associated with cur_addr */
-  lock_release(&gStampTbl[set_idx].lock);
+  //lock_release(&gStampTbl[set_idx].lock);
+  PIN_MutexUnlock(&gStampTbl[set_idx].lock);
 
   lstat->accum_time += SFP_RDTSC() - start;
 
@@ -372,6 +385,7 @@ inline void ThreadStart_hook(THREADID tid, local_stat_t* tdata) {
   if(tid) {
     activate(tid);
   }
+  cout << "pin id " << tid << ", system tid " << PIN_GetTid() << endl;
 }
 
 //
@@ -390,13 +404,20 @@ inline void ThreadFini_hook(THREADID tid, local_stat_t* lstat) {
 
     for(TStamp j=0; j<MAX_WINDOW; j++)
     {
-      wcount[i][j] += lstat->wcount[i][j];
-      wcount_i[i][j] += lstat->wcount_i[i][j];
+      wcount[i][j]         += lstat->wcount[i][j];
+      wcount_i[i][j]       += lstat->wcount_i[i][j];
     }
+
     //__sync_fetch_and_add(&M[i].con, lstat->M[i]);
     M[i].con += lstat->M[i];
     lock_release(&gWcountLock[i].lock);
 
+  }
+
+  for(TStamp j=0; j<MAX_WINDOW; j++) {
+    per_wcount[tid][j]   += lstat->per_wcount[j];
+    per_wcount_i[tid][j] += lstat->per_wcount_i[j];
+    per_M[tid] = lstat->per_M;
   }
 
 
@@ -416,10 +437,12 @@ inline void ThreadFini_hook(THREADID tid, local_stat_t* lstat) {
     lock_release(&gPillarsLock[i].lock);
   }
 
+/*
   if (lstat->length != 0)
   {
     cout << "average cycles : " << lstat->accum_time / lstat->length << endl;
   }
+*/
 
 }
 
@@ -511,6 +534,30 @@ LOCALFUN VOID CollectLastAccesses() {
   
   int thd_count;
   TStampList::Iterator curr;
+  INT64 temp[MAX_THREAD][MAX_WINDOW];
+  INT64 temp_i[MAX_THREAD][MAX_WINDOW];
+
+  /* complete the per-thread access frequency */
+  for(int j=0;j<MAX_THREAD;j++) {
+    for(TStamp i=0;i<MAX_WINDOW;i++) {
+      temp[j][i] = 0;
+    }
+
+    for(TStamp i=0;i<MAX_WINDOW;i++) {
+      if ( per_wcount[j][i] != 0) {
+        INT64 total_i = per_wcount[j][i] * (gEndTime - gStartTime) - per_wcount_i[j][i];
+        TStamp distance = total_i / per_wcount[j][i];
+        int idx = sublog_value_to_index<MAX_WINDOW, SUBLOG_BITS>(distance);
+        temp[j][idx] += per_wcount[j][i];
+        temp_i[j][idx] += total_i;
+      }
+    }
+
+    for(TStamp i=0;i<MAX_WINDOW;i++) {
+      per_wcount[j][i] += temp[j][i];
+      per_wcount_i[j][i] += temp_i[j][i];
+    }
+  }
 
   /* traversing all entries in gStampTbl */
   for(int i=0;i<MAP_SIZE+1;i++) {
@@ -583,6 +630,21 @@ LOCALFUN VOID OpenOutputFile() {
   }
   ResultFile << endl;
 
+  stringstream ss;
+  string filename = KnobResultFile.Value();
+  ss.str(string());
+  ss << filename << ".pt";
+  PerThreadResultFile.open(ss.str().c_str());
+  for(TStamp j=0;j<MAX_THREAD;j++) {
+    PerThreadResultFile << per_M[j] << "\t";
+  }
+  PerThreadResultFile << endl;
+  PerThreadResultFile << "ws\t";
+  for(TStamp j=0;j<MAX_THREAD;j++) {
+    PerThreadResultFile << j+1 << "\t";
+  }
+  PerThreadResultFile << endl;
+
 }
   
 //
@@ -640,9 +702,11 @@ VOID Fini(INT32 code, VOID* v){
 
   /* the sfp statistics */
   double sfp[MAX_THREAD];
+  double per_freq[MAX_THREAD];
   
   /* buffer used to hold the sum of wcount and wcount_i arrays */
   double wcount_sum[MAX_THREAD], wcount_sum_i[MAX_THREAD];
+  double per_wcount_sum[MAX_THREAD], per_wcount_sum_i[MAX_THREAD];
 
   TStamp j, ws;
   int i;
@@ -665,7 +729,10 @@ VOID Fini(INT32 code, VOID* v){
 
     wcount_sum[i] = 0;
     wcount_sum_i[i] = 0;
+    per_wcount_sum[i] = 0;
+    per_wcount_sum_i[i] = 0;
     sfp[i] = 0;
+    per_freq[i] = 0;
 
   }
 
@@ -674,6 +741,8 @@ VOID Fini(INT32 code, VOID* v){
 
       wcount_sum[i] += wcount[i][j];
       wcount_sum_i[i] += wcount_i[i][j];
+      per_wcount_sum[i] += per_wcount[i][j];
+      per_wcount_sum_i[i] += per_wcount_i[i][j];
       
     }
   }
@@ -686,6 +755,7 @@ VOID Fini(INT32 code, VOID* v){
 
     /* first column is the window length */
     ResultFile << ws;
+    PerThreadResultFile << ws;
 
     for(i=0;i<MAX_THREAD;i++) {
 
@@ -697,14 +767,27 @@ VOID Fini(INT32 code, VOID* v){
 
       /* one column for each sharing degree */
       ResultFile << "\t" << setprecision(12) << sfp[i]*WORDWIDTH;
+
+      per_freq[i] = 1.0 * (per_wcount_sum_i[i] - (ws-1)*per_wcount_sum[i]) / (N-ws+1);    
+      per_freq[i] = per_M[i] - per_freq[i];
+
+      per_wcount_sum[i] -= per_wcount[i][j];
+      per_wcount_sum_i[i] -= per_wcount_i[i][j];
+
+      /* one column for each sharing degree */
+      PerThreadResultFile << "\t" << setprecision(12) << per_freq[i];
       
     }
 
     ResultFile << endl;
+    PerThreadResultFile << endl;
   }
 
   ResultFile.close();  
+  PerThreadResultFile.close();  
 
+  for(TStamp i=0; i<(MAP_SIZE+1); i++)
+    PIN_MutexFini(&gStampTbl[i].lock);
   /* deallocate the global stamp table */
   delete[] gStampTbl;
 }
@@ -795,7 +878,7 @@ int main(int argc, char *argv[])
     /* allocate space for gStampTbl */
     gStampTbl = new TStampTblEntry[MAP_SIZE+1];
     for(TStamp i=0; i<(MAP_SIZE+1); i++)
-      lock_release(&gStampTbl[i].lock);
+      PIN_MutexInit(&gStampTbl[i].lock);
 
     for(int i=0; i<MAX_THREAD; i++)
     {

@@ -20,6 +20,17 @@ anyset-fp : This tool is another extension of anyk-sfp.
             the footprint for a given thread set. It incurs
             a lot overhead, and only scales up to 22 threads
 
+anytaskset-fp: This is an extension of anyset-fp. Beside the
+               Shared footprint infomation, it also computes
+               a per-thread memory access frequency to further
+               model LLC performance. Since this tool has a fully
+               privatized implementation, it slowdown is dramatically
+               lower than simulator. Using anytaskset-fp-compose.rb,
+               a parallel program's per-thread last level 
+               cache misses can be modeled easily. The deviation
+               of LLC cache miss rate from simulator is no more
+               than 25% with 3x speedup.
+
 These tools are implemented in Pin Tools 2.13 and can be 
 ported to other platforms.
 
